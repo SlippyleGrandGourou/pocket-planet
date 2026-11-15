@@ -85,7 +85,7 @@ namespace LivingPlanet
         float flyT = 1f;
         Vector3 flyFromPos, flyToPos;
         Quaternion flyFromRot, flyToRot;
-        Rect eventsRect;
+        Rect eventsRect, dialRect, infoRect;
 
         [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.AfterSceneLoad)]
         static void Bootstrap()
@@ -118,12 +118,53 @@ namespace LivingPlanet
             radius = RadOptions[radIdx];
             int parsed;
             seed = int.TryParse(seedText, out parsed) ? parsed : 0;
+            mainMenu = false; pauseMenu = false;
+            StartGeneration();
+        }
+
+        // Point d'entrée unique de toute génération (menu ou touche R) : les barres de progression sont
+        // toujours remises aux phases de génération, quel que soit l'écran de chargement précédent.
+        void StartGeneration()
+        {
             planetSavePath = PlanetSave.NewPath();
             quitSaved = false;
-            mainMenu = false; pauseMenu = false;
             loadingPreview = null;
             BeginLoadPhases(GenPhaseNames);
-            StartCoroutine(Generate());
+            StartCoroutine(GenerateSafely());
+        }
+
+        // Touche R : nouvelle planète aléatoire, qui ne garde ni la graine ni le nom de la précédente.
+        void RegenerateRandom()
+        {
+            seed = 0;
+            planetName = "";
+            StartGeneration();
+        }
+
+        // Un `yield` est interdit dans un try/catch : on fait donc avancer Generate() pas à pas depuis ici,
+        // pour qu'une exception ramène au menu avec un message au lieu de figer l'écran de chargement.
+        IEnumerator GenerateSafely()
+        {
+            var steps = Generate();
+            while (true)
+            {
+                bool more;
+                try { more = steps.MoveNext(); }
+                catch (System.Exception e) { FailGeneration(e); more = false; }
+                if (!more) break;
+                yield return steps.Current;
+            }
+        }
+
+        void FailGeneration(System.Exception e)
+        {
+            UnityEngine.Debug.LogException(e);
+            if (view != null) { view.Destroy(); view = null; }
+            Grid = null; Sim = null; Eco = null; Fauna = null;
+            ResetStats();
+            generating = false; ready = false;
+            mainMenu = true; selectingPlanet = false;
+            saveMessage = "Échec de la génération : " + e.Message;
         }
 
         IEnumerator Generate()
@@ -221,7 +262,7 @@ namespace LivingPlanet
             if (!ready) return;
             bool menuOpen = pauseMenu;
             UpdateCursor();
-            if (!menuOpen && !showStats && !renamingPlanet) { HandleTools(); UpdateCamera(); }
+            if (!menuOpen && !showStats && !renamingPlanet && !poiTyping) { HandleTools(); UpdateCamera(); }
 
             float simDt = 0f;
             if (!paused && !menuOpen)
@@ -315,9 +356,19 @@ namespace LivingPlanet
                 else if (kb.enterKey.wasPressedThisFrame || kb.numpadEnterKey.wasPressedThisFrame) ConfirmRenamePlanet();
                 return;
             }
+            if (poiTyping)
+            {
+                // Saisie d'un nom de lieu : aucune lettre ne doit déclencher son raccourci (R, M, K, T...).
+                var mouse = Mouse.current;
+                bool clickedAway = mouse != null && mouse.leftButton.wasPressedThisFrame && !MouseOverUi(mouse);
+                if (clickedAway || kb.escapeKey.wasPressedThisFrame || kb.enterKey.wasPressedThisFrame || kb.numpadEnterKey.wasPressedThisFrame)
+                    StopPoiTyping();
+                return;
+            }
             if (kb.escapeKey.wasPressedThisFrame)
             {
                 if (showStats) showStats = false;
+                else if (ToolArmed && !pauseMenu) toolTab = -1;
                 else pauseMenu = !pauseMenu;
             }
             if (pauseMenu) return;
@@ -342,11 +393,7 @@ namespace LivingPlanet
             var debugKey = kb.FindKeyOnCurrentKeyboardLayout("ù");
             if (debugKey != null && debugKey.wasPressedThisFrame) showCellDebug = !showCellDebug;
             if (kb.vKey.wasPressedThisFrame) view.ShowPlants = !view.ShowPlants;
-            if (kb.rKey.wasPressedThisFrame && SavePlanet())
-            {
-                planetSavePath = PlanetSave.NewPath();
-                StartCoroutine(Generate()); return;
-            }
+            if (kb.rKey.wasPressedThisFrame && SavePlanet()) { RegenerateRandom(); return; }
 
             if (kb.bKey.wasPressedThisFrame) { int c = Pick(); if (c >= 0) Sim.StartVolcano(c); }
             if (kb.fKey.wasPressedThisFrame) { int c = Pick(); if (c >= 0) Eco.Ignite(c); }
@@ -649,7 +696,8 @@ namespace LivingPlanet
         {
             Vector2 p = ms.position.ReadValue();
             p.y = Screen.height - p.y;
-            return toolRect.Contains(p) || toolbarRect.Contains(p) || eventsRect.Contains(p) || mapPanelRect.Contains(p);
+            return toolRect.Contains(p) || toolbarRect.Contains(p) || eventsRect.Contains(p) || mapPanelRect.Contains(p) ||
+                dialRect.Contains(p) || infoRect.Contains(p);
         }
 
         void DrawEvents()
@@ -865,6 +913,7 @@ namespace LivingPlanet
                 if (SavePlanet())
                 {
                     pauseMenu = false; mainMenu = true; ready = false;
+                    if (planetName == DefaultPlanetName(curSeed)) planetName = "";
                     if (view != null) { view.Destroy(); view = null; }
                     cam.backgroundColor = new Color(0.01f, 0.012f, 0.03f);
                 }
@@ -916,6 +965,7 @@ namespace LivingPlanet
             float w = Mathf.Min(520f, Screen.width - 20f);
             float h = wrap.CalcHeight(new GUIContent(InfoText()), w - 24f) + 20f;
             var r = new Rect(Screen.width - w - 10f, 52f, w, h);
+            infoRect = r;
             FillRect(r, new Color(0f, 0f, 0f, 0.65f));
             GUI.Label(new Rect(r.x + 12f, r.y + 10f, r.width - 24f, r.height - 20f), InfoText(), wrap);
         }
@@ -938,6 +988,8 @@ namespace LivingPlanet
             quitSaved = true;
             return true;
         }
+
+        void OnDestroy() { Application.wantsToQuit -= WantsToQuit; }
 
         void OnApplicationQuit()
         {
@@ -974,16 +1026,9 @@ namespace LivingPlanet
         // cellule sous la souris (mode dieu)
         int PickMouse()
         {
-            if (Mouse.current == null) return Grid.CellFromDir(camPos);
-            Ray ray = cam.ScreenPointToRay(Mouse.current.position.ReadValue());
-            float r = radius + 10f;
-            float b = Vector3.Dot(ray.origin, ray.direction);
-            float cc = Vector3.Dot(ray.origin, ray.origin) - r * r;
-            float disc = b * b - cc;
-            if (disc < 0f) return -1;
-            float t = -b - Mathf.Sqrt(disc);
-            if (t < 0f) return -1;
-            return Grid.CellFromDir(ray.origin + ray.direction * t);
+            // Marche le long du rayon jusqu'au relief réel : une sphère lisse décalait la cellule visée sur les
+            // montagnes et ne renvoyait plus rien dès que la caméra descendait sous son rayon.
+            return Mouse.current == null ? Grid.CellFromDir(camPos) : PickDebugMouse(Mouse.current);
         }
 
         // cadran : date, saison, heure locale et boussole. En mode dieu il suit la position de la souris sur la planète.
@@ -1007,6 +1052,7 @@ namespace LivingPlanet
 
             float w = 560f, x0 = Screen.width / 2f - w / 2f;
             float nameBarH = 30f, y0 = 6f + nameBarH + 4f;
+            dialRect = new Rect(x0, 6f, w, y0 + 84f - 6f);
             DrawPlanetNameBar(x0, 6f, w, nameBarH);
             var old = GUI.color;
             GUI.color = new Color(0f, 0f, 0f, 0.6f);
@@ -1112,6 +1158,7 @@ namespace LivingPlanet
             DrawMiniMap();
             GUI.enabled = guiEnabled;
             if (showCellDebug && !pauseMenu) DrawCellDebug();
+            infoRect = new Rect(0, 0, 0, 0);
             if (!showHud) { layerRect = new Rect(0, 0, 0, 0); return; }
 
             if (showInfo && !pauseMenu) DrawInfoOverlay();

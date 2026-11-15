@@ -1,0 +1,19 @@
+<linker>
+  <assembly fullname="Assembly-CSharp">
+    <type fullname="LivingPlanet.PlanetSim" preserve="all" />
+    <type fullname="LivingPlanet.WaterState" preserve="all" />
+    <type fullname="LivingPlanet.PlanetSim/Volcano" preserve="all" />
+    <type fullname="LivingPlanet.PlanetSim/LavaFlow" preserve="all" />
+    <type fullname="LivingPlanet.Ecosystem" preserve="all" />
+    <type fullname="LivingPlanet.EcoFields" preserve="all" />
+    <type fullname="LivingPlanet.Fauna" preserve="all" />
+    <type fullname="LivingPlanet.Plant" preserve="all" />
+    <type fullname="LivingPlanet.Animal" preserve="all" />
+    <type fullname="LivingPlanet.Pop" preserve="all" />
+    <type fullname="LivingPlanet.Tsunami" preserve="all" />
+    <type fullname="LivingPlanet.QuakeEvent" preserve="all" />
+    <type fullname="LivingPlanet.EventMsg" preserve="all" />
+    <type fullname="LivingPlanet.Asteroid" preserve="all" />
+    <type fullname="LivingPlanet.AstFx" preserve="all" />
+  </assembly>
+</linker>

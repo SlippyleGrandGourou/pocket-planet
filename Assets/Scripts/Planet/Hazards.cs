@@ -578,9 +578,16 @@ namespace LivingPlanet
                 ? Ground(c) + water[c] - tsunamiBase[c] : 0f;
         }
 
+        // Débit minimal (épaisseur par sous-pas) reçu d'une voisine active pour qu'une cellule terrestre rejoigne
+        // l'onde : au-dessus du ruissellement d'une simple pellicule de pluie, très en dessous d'une vraie vague.
+        const float TsunamiReachFlow = 0.005f;
+
         void StepTsunamiWater(float dt)
         {
             // L'onde n'active que les cellules qu'elle atteint, sans perturber les lacs et rivières éloignés.
+            // En mer, elle se propage par son écart à la surface de référence ou par son inertie. Dès qu'une
+            // terre est en jeu, cet écart n'a plus de sens (sa référence est le niveau de la mer, donc il vaut
+            // l'altitude et serait toujours "non nul") : seule l'eau réellement poussée vers la cellule compte.
             Par.For(M, (start, end) =>
             {
                 for (int c = start; c < end; c++)
@@ -591,10 +598,17 @@ namespace LivingPlanet
                         {
                             int edge = c * 4 + k, n = G.Nbr[edge];
                             if (n < 0 || tsunamiActive[n] == 0 || water[n] <= 0.001f) continue;
-                            float head = Ground(n) + water[n] - tsunamiBase[n];
-                            if (Mathf.Abs(head) > 0.01f ||
-                                Mathf.Abs(tsunamiMomentum[n * 4 + G.Back[edge]]) > 0.01f)
-                            { active = 1; break; }
+                            int toward = n * 4 + G.Back[edge];
+                            bool reached;
+                            if (IsOcean(c) && IsOcean(n))
+                            {
+                                float head = Ground(n) + water[n] - tsunamiBase[n];
+                                reached = Mathf.Abs(head) > 0.01f || Mathf.Abs(tsunamiMomentum[toward]) > 0.01f;
+                            }
+                            // Débit du pas précédent, relu depuis l'inertie (sauvegardée) plutôt que depuis
+                            // tsunamiOut (non sauvegardé) : le résultat reste identique après un rechargement.
+                            else reached = tsunamiMomentum[toward] * dt > TsunamiReachFlow;
+                            if (reached) { active = 1; break; }
                         }
                     tsunamiActiveN[c] = active;
                 }

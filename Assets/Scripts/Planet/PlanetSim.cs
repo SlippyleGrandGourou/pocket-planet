@@ -138,11 +138,19 @@ namespace LivingPlanet
             InitWeather();
             var dirs = G.Dir; var la = latA;
             Par.For(M, (s, e) => { for (int c = s; c < e; c++) la[c] = Mathf.Asin(Mathf.Clamp(dirs[c].y, -1f, 1f)); });
-            // Bruit d'irrégularité du chenal hydraulique (voir StepHydro) : position fixe sur la grille, donc
-            // précalculé une seule fois ici plutôt que ré-évalué à chaque cellule à CHAQUE pas de simulation
-            // (contrairement à la tectonique, l'hydrologie tourne tous les ticks, pas tous les TectEvery) —
-            // sinon le coût du bruit de Perlin provoquait des microgels sensibles en vitesse rapide.
             channelNoise = new float[M];
+            InitChannelNoise();
+        }
+
+        // Bruit d'irrégularité du chenal hydraulique (voir StepHydro) : position fixe sur la grille, donc
+        // précalculé une seule fois plutôt que ré-évalué à chaque cellule à CHAQUE pas de simulation
+        // (contrairement à la tectonique, l'hydrologie tourne tous les ticks, pas tous les TectEvery) —
+        // sinon le coût du bruit de Perlin provoquait des microgels sensibles en vitesse rapide.
+        // Il dépend de la table de bruit globale : Generate le recalcule donc après Noise.Seed, sinon une
+        // même graine donnait des chenaux différents selon la planète (ou l'aperçu de menu) qui précédait.
+        void InitChannelNoise()
+        {
+            var dirs = G.Dir;
             Par.For(M, (s, e) =>
             {
                 for (int c = s; c < e; c++)
@@ -240,6 +248,7 @@ namespace LivingPlanet
         public void Generate(int seed)
         {
             Noise.Seed(seed);
+            InitChannelNoise();
             var rnd = new System.Random(seed * 31 + 7);
             Vector3 O(float s) { return new Vector3((float)rnd.NextDouble() * 80f - 40f, (float)rnd.NextDouble() * 80f - 40f, (float)rnd.NextDouble() * 80f - 40f) * s; }
             Vector3 o1 = O(1), o2 = O(1), o3 = O(1), o4 = O(1), o5 = O(1);
@@ -971,6 +980,10 @@ namespace LivingPlanet
                             mantleSolid[c] -= spill;
                             change -= spill;
                         }
+                        // Rien à redéposer : les marques posées ci-dessus ne doivent pas être lues comme une
+                        // quantité de sédiment par la passe suivante.
+                        else if (count > 0)
+                            for (int k = 0; k < 4; k++) thOut[b + k] = 0f;
                         if (change > 0f) TransferMantleRock(c, change);
                     }
                 });
@@ -983,7 +996,7 @@ namespace LivingPlanet
                         for (int k = 0; k < 4; k++)
                         {
                             int n = nbr[b + k];
-                            if (n >= 0) inbound += thOut[n * 4 + back[b + k]];
+                            if (n >= 0) inbound += thOut[n * 4 + back[b + k]] * G.Area[n] / G.Area[c];
                         }
                         if (inbound > 0f) sed[c] += inbound;
                     }

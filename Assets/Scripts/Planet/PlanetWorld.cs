@@ -42,7 +42,7 @@ namespace LivingPlanet
         int resIdx = 2, radIdx = 1;
         static readonly float[] RadOptions = { 600f, 1200f, 2000f, 3000f, 4000f };
         static readonly string[] RadNames = { "Petite (600)", "Grande (1200)", "Géante (2000)", "Colossale (3000)", "Immense (4000)" };
-        float MaxCamAlt { get { return 2500f + radius * 0.8f; } }
+        internal float MaxCamAlt { get { return 2500f + radius * 0.8f; } }
         string seedText = "";
         public string planetName = "";
         bool renamingPlanet, renameFocused;
@@ -1067,7 +1067,7 @@ namespace LivingPlanet
             // boussole : cap de la caméra par rapport au nord local
             Vector3 north = Vector3.up - d * d.y;
             north = north.sqrMagnitude < 1e-6f ? Vector3.forward : north.normalized;
-            Vector3 east = Vector3.Cross(north, d).normalized;
+            Vector3 east = Vector3.Cross(d, north).normalized;
             Vector3 fwd = camRot * Vector3.forward;
             float heading = Mathf.Atan2(Vector3.Dot(fwd, east), Vector3.Dot(fwd, north)) * Mathf.Rad2Deg;
             float cy = y0 + 52f, half = w / 2f - 40f;

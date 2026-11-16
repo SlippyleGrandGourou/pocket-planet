@@ -317,7 +317,7 @@ namespace LivingPlanet
             Vector3 north = Vector3.ProjectOnPlane(Vector3.up, position);
             if (north.sqrMagnitude < 1e-6f) north = Vector3.ProjectOnPlane(Vector3.forward, position);
             north.Normalize();
-            Vector3 east = Vector3.Cross(north, position).normalized;
+            Vector3 east = Vector3.Cross(position, north).normalized;
             Vector3 heading = Vector3.ProjectOnPlane(camRot * Vector3.forward, position);
             if (heading.sqrMagnitude < 1e-6f) heading = Vector3.ProjectOnPlane(camRot * Vector3.up, position);
             float angle = Mathf.Atan2(Vector3.Dot(heading, east), Vector3.Dot(heading, north)) * Mathf.Rad2Deg;

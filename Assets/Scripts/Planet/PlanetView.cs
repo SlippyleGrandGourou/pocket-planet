@@ -101,6 +101,7 @@ namespace LivingPlanet
         readonly float AtmoThickness;
         bool atmoShader;
         GameObject atmoIn, atmoOut, atmoFallback;
+        float atmoShellRadius;
         float cloudTimer;
         struct Drop { public Vector3 dir; public float life; }
         Drop[] drops = new Drop[1200];
@@ -113,7 +114,12 @@ namespace LivingPlanet
         public PlanetView(PlanetWorld w, Camera camera)
         {
             G = w.Grid; S = w.Sim; E = w.Eco; Fa = w.Fauna; R = G.Radius; cam = camera; HeightScale = Mathf.Clamp(R / 1200f, 0.6f, 2f); AtmoThickness = 300f * HeightScale;
-            SkyDist = Mathf.Max(5000f, 2500f + R * 0.8f + 1800f);
+            // Le point de la planète le plus éloigné que la caméra puisse voir est son horizon au zoom arrière
+            // maximal : étoiles, soleil et lune doivent rester au-delà, sinon ils se dessinent devant le bord
+            // du disque planétaire (c'était le cas dès un rayon de 2000).
+            float farthestCamera = R + w.MaxCamAlt;
+            float farthestHorizon = Mathf.Sqrt(farthestCamera * farthestCamera - R * R);
+            SkyDist = Mathf.Max(5000f, farthestHorizon + 1500f);
         }
 
         public void MarkDirty() { for (int f = 0; f < 6; f++) faces[f].dirty = true; }
@@ -402,7 +408,8 @@ namespace LivingPlanet
                 amr.shadowCastingMode = ShadowCastingMode.Off;
                 return;
             }
-            var mesh = BuildGridMesh(64, ra * 1.04f, -1);
+            atmoShellRadius = ra * 1.04f;
+            var mesh = BuildGridMesh(64, atmoShellRadius, -1);
             GameObject Make(string name, float cull)
             {
                 var go = new GameObject(name);
@@ -542,7 +549,8 @@ namespace LivingPlanet
             var sr = sunDiscR;
             sr.sharedMaterial = MakeUnlit(new Color(1f, 0.95f, 0.75f));
             sr.shadowCastingMode = ShadowCastingMode.Off;
-            sunGo.transform.localScale = Vector3.one * 110f;
+            // Taille proportionnelle à la distance : le disque garde la même taille apparente quel que soit le rayon.
+            sunGo.transform.localScale = Vector3.one * (110f * (SkyDist - 500f) / 4500f);
             sunDiscT = sunGo.transform;
 
             // la lune est éclairée par la lumière du soleil : ses phases viennent de leur position relative
@@ -555,7 +563,7 @@ namespace LivingPlanet
             mr.sharedMaterial = MakeLit(new Color(0.78f, 0.78f, 0.8f), 0f, false);
             mr.shadowCastingMode = ShadowCastingMode.Off;
             mr.receiveShadows = false;
-            moonGo.transform.localScale = Vector3.one * 60f;
+            moonGo.transform.localScale = Vector3.one * (60f * (SkyDist - 700f) / 4300f);
             moonT = moonGo.transform;
         }
 
@@ -1128,7 +1136,9 @@ namespace LivingPlanet
                 cloudHere = Mathf.Clamp01((cloudHere / 5f - 0.2f) / 0.8f) * Atmo;
                 skyCloud = Mathf.Lerp(skyCloud, cloudHere, 0.02f);
                 Shader.SetGlobalFloat("_LP_Cloud", skyCloud);
-                bool inside = alt < AtmoThickness;
+                // "Dedans" se juge par rapport à la coque réellement dessinée, pas au sommet de l'atmosphère :
+                // entre les deux, la caméra est dans la coque et sa face externe, seule affichée, est invisible.
+                bool inside = camPos.magnitude < atmoShellRadius;
                 atmoIn.SetActive(ShowAtmosphere && inside);
                 atmoOut.SetActive(ShowAtmosphere && !inside);
             }

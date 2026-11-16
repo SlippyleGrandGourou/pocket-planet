@@ -22,6 +22,15 @@ namespace LivingPlanet
         [Serializable] sealed class PoiList { public List<PoiData> items = new List<PoiData>(); }
         PoiList pois = new PoiList();
         string poiName = "";
+        // Vrai tant que le champ de nom d'un lieu a le focus clavier : les raccourcis du jeu sont alors suspendus.
+        bool poiTyping;
+        const string PoiField = "PoiNameField";
+
+        void StopPoiTyping()
+        {
+            poiTyping = false;
+            GUIUtility.keyboardControl = 0;
+        }
         Vector2 poiScroll;
         string PoiKey { get { return "poi_" + curSeed + "_" + resolution + "_" + (int)radius; } }
 
@@ -88,7 +97,8 @@ namespace LivingPlanet
                 blowDir = Vector3.ProjectOnPlane(blowDir, n);
                 if (blowDir.sqrMagnitude < 1e-8f) { blowHasDir = false; return; }
                 blowDir.Normalize();
-                Sim.Blow(c, blowDir, blowStr * Time.unscaledDeltaTime * 6f, Mathf.RoundToInt(blowRad));
+                // En pause, rien ne dissipe les rafales : souffler s'accumulerait sans limite.
+                if (!paused) Sim.Blow(c, blowDir, blowStr * Time.unscaledDeltaTime * 6f, Mathf.RoundToInt(blowRad));
                 return;
             }
             if (!ms.leftButton.wasPressedThisFrame || over) return;
@@ -150,6 +160,7 @@ namespace LivingPlanet
                     toolTab = on ? -1 : i;
             }
             DrawTimeControls(new Rect(toolbarRect.x + 6f, toolbarRect.y + 6f + toolbarRows * 38f, width - 12f, 34f));
+            if (toolTab != 5 && poiTyping) StopPoiTyping();
             if (toolTab < 0) { toolRect = new Rect(0, 0, 0, 0); DrawToolStatus(); return; }
 
             float w = 360f;
@@ -204,9 +215,12 @@ namespace LivingPlanet
         {
             float w = toolRect.width;
             GUI.Label(new Rect(toolRect.x + 10, y, w - 20, 22), "Points d'intérêt (cadrage de la caméra)", style); y += 26;
+            GUI.SetNextControlName(PoiField);
             poiName = GUI.TextField(new Rect(toolRect.x + 10, y, w - 130, 30), poiName, 24, btn);
+            poiTyping = GUI.GetNameOfFocusedControl() == PoiField;
             if (GUI.Button(new Rect(toolRect.xMax - 112, y, 102, 30), "Enregistrer", btn))
             {
+                StopPoiTyping();
                 string nm = string.IsNullOrWhiteSpace(poiName) ? "Lieu " + (pois.items.Count + 1) : poiName.Trim();
                 pois.items.Add(new PoiData { name = nm, pos = camPos, rot = camRot });
                 SavePois(); poiName = ""; ToolMsg("Point d'intérêt « " + nm + " » enregistré");

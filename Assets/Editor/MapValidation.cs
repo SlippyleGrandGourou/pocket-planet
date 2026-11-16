@@ -164,6 +164,12 @@ public static class MapValidation
             int footer = BitConverter.ToInt32(data, data.Length - 4);
             Array.Copy(BitConverter.GetBytes(15), 0, data, 4, 4);
             Array.Copy(BitConverter.GetBytes(footer ^ currentVersion ^ 15), 0, data, data.Length - 4, 4);
+            // Le nom de la planète n'existe que depuis la version 17, dans l'aperçu puis dans l'en-tête : une
+            // vraie sauvegarde en version 15 n'en contient aucun, sinon toute la lecture se décale.
+            const int previewName = 4 + 4 + 4 * 4;
+            data = RemoveString(data, previewName);
+            const int headerName = previewName + PreviewPixelBytes + 5 * 4;
+            data = RemoveString(data, headerName);
             using (var file = File.Create(path))
             using (var gzip = new GZipStream(file, CompressionMode.Compress))
                 gzip.Write(data, 0, data.Length);
@@ -191,6 +197,20 @@ public static class MapValidation
             UnityEngine.Object.DestroyImmediate(cameraObject);
             if (File.Exists(path)) File.Delete(path);
         }
+    }
+
+    // Aperçu de sauvegarde : 128 x 64 pixels, 3 octets par pixel.
+    const int PreviewPixelBytes = 128 * 64 * 3;
+
+    // Retire une chaîne écrite par BinaryWriter (longueur sur un octet, donc moins de 128 octets, puis le texte).
+    static byte[] RemoveString(byte[] data, int offset)
+    {
+        int length = data[offset];
+        Check(length < 128, "Test string is too long to strip from the legacy save");
+        var result = new byte[data.Length - 1 - length];
+        Array.Copy(data, 0, result, 0, offset);
+        Array.Copy(data, offset + 1 + length, result, offset, result.Length - offset);
+        return result;
     }
 
     static void RandomRoundTrip()

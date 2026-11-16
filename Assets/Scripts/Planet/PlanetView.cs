@@ -1469,21 +1469,58 @@ namespace LivingPlanet
             get { int s = 0; if (buckets != null) for (int i = 0; i < buckets.Length; i++) s += buckets[i].n; return s; }
         }
 
+        // Détruire un GameObject ne libère ni ses maillages, ni ses matériaux, ni ses textures : tout ce que la
+        // vue a créé par `new` doit être détruit explicitement, sinon chaque régénération de planète laisse
+        // l'ancienne en mémoire. Tous ces objets sont créés par la vue (aucun asset du projet, aucune primitive
+        // intégrée), donc les détruire est sans risque ; les shaders, eux, sont partagés et ne sont pas touchés.
         public void Destroy()
         {
             if (flashLight != null) flashLight.enabled = false;
-            if (flowB != null)
+            var owned = new HashSet<UnityEngine.Object>();
+            for (int f = 0; f < faces.Length; f++)
             {
-                UnityEngine.Object.Destroy(flowB[0][0].mesh);
-                for (int l = 0; l < FlowLayers; l++)
-                    for (int k = 0; k < flowB[l].Length; k++)
-                        UnityEngine.Object.Destroy(flowB[l][k].mat);
+                var F = faces[f];
+                if (F == null) continue;
+                Own(owned, F.mesh); Own(owned, F.renderMesh); Own(owned, F.waterMesh); Own(owned, F.tex);
             }
-            if (root != null) UnityEngine.Object.Destroy(root);
-            if (starsT != null) UnityEngine.Object.Destroy(starsT.gameObject);
-            if (sunDiscT != null) UnityEngine.Object.Destroy(sunDiscT.gameObject);
-            if (moonT != null) UnityEngine.Object.Destroy(moonT.gameObject);
-            if (precipT != null) UnityEngine.Object.Destroy(precipT.gameObject);
+            Own(owned, waterMaterial);
+            Own(owned, buckets); Own(owned, faunaB); Own(owned, cloudB);
+            if (flowB != null) for (int l = 0; l < flowB.Length; l++) Own(owned, flowB[l]);
+            Own(owned, new[] { riverB, icebergB, flameB, flameHot, smokeB, emberB, boltB,
+                astRock, astGlow, astTrail, astBall, astRing, astPath, astZone });
+
+            var objects = new[]
+            {
+                root,
+                starsT != null ? starsT.gameObject : null,
+                sunDiscT != null ? sunDiscT.gameObject : null,
+                moonT != null ? moonT.gameObject : null,
+                precipT != null ? precipT.gameObject : null
+            };
+            foreach (var go in objects)
+            {
+                if (go == null) continue;
+                foreach (var filter in go.GetComponentsInChildren<MeshFilter>(true)) Own(owned, filter.sharedMesh);
+                foreach (var renderer in go.GetComponentsInChildren<Renderer>(true))
+                    foreach (var material in renderer.sharedMaterials) Own(owned, material);
+                UnityEngine.Object.Destroy(go);
+            }
+            foreach (var item in owned) UnityEngine.Object.Destroy(item);
+        }
+
+        static void Own(HashSet<UnityEngine.Object> owned, UnityEngine.Object item)
+        {
+            if (item != null) owned.Add(item);
+        }
+
+        static void Own(HashSet<UnityEngine.Object> owned, Bucket[] items)
+        {
+            if (items == null) return;
+            foreach (var bucket in items)
+            {
+                if (bucket == null) continue;
+                Own(owned, bucket.mesh); Own(owned, bucket.mat);
+            }
         }
     }
 }

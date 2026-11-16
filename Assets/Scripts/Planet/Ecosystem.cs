@@ -69,10 +69,13 @@ namespace LivingPlanet
             return (d - x) / (d - c);
         }
 
+        // Le kelp vit sous l'eau : une cuvette sèche sous l'altitude zéro ne lui convient pas.
+        const float KelpMinWater = 0.3f;
+
         public float Suit(int type, int c)
         {
             float g = S.rock[c] + S.sed[c];
-            if (type == Kelp) return SuitCore(type, c, g, 0f, 0f, 0f);
+            if (type == Kelp) return S.water[c] < KelpMinWater ? 0f : SuitCore(type, c, g, 0f, 0f, 0f);
             if (g < (type == Reed ? 0.3f : 1.0f)) return 0f;
             float sl = type == Reed ? 0f : S.Slope(c);
             return SuitCore(type, c, g, sl, S.sed[c], S.snow[c]);
@@ -366,7 +369,7 @@ namespace LivingPlanet
 
                     bool marine = p.type == Kelp;
                     bool die = p.health <= 0f || p.age > p.maxAge || S.lava[c] > 0.2f ||
-                        (marine ? (g > -0.3f || g < -18f) : (S.water[c] > (p.type == Reed ? 2.5f : 1.2f) || g < 0.3f));
+                        (marine ? (g > -0.3f || g < -18f || S.water[c] < KelpMinWater) : (S.water[c] > (p.type == Reed ? 2.5f : 1.2f) || g < 0.3f));
                     if (!die && p.age > 0.8f * p.maxAge && R() < dt * 2f * (p.age / p.maxAge) / (0.2f * p.maxAge)) die = true;
                     if (die)
                     {
@@ -388,10 +391,13 @@ namespace LivingPlanet
                 }
                 else if (p.state == 2)
                 {
+                    // Le pas de temps dépasse toujours l'ancien seuil de 0,04 : on teste donc "vient de
+                    // s'enflammer" avant d'avancer le minuteur, sinon aucune plante ne survivait jamais.
+                    bool justLit = p.timer <= 0f;
                     p.timer += dt;
                     if (S.fire[c] <= 0f)
                     {
-                        if (p.timer < 0.04f) { p.state = 0; p.health *= 0.5f; }
+                        if (justLit) { p.state = 0; p.health *= 0.5f; }
                         else { p.state = 3; p.timer = 0f; deaths++; }
                     }
                     else

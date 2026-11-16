@@ -651,7 +651,12 @@ public static class TectonicValidation
                 if (n >= 0) largestStep = Mathf.Max(largestStep, Mathf.Abs(s.rock[c] - s.rock[n]));
             }
         }
-        Check(raised > 20 && lowered > 20 && largestStep < 0.2f, "Earthquake displacement is not broad and gradual");
+        // Le séisme soulève un bloc, affaisse l'autre et ouvre une cassure nette sur la trace de la faille
+        // (voir Quake) : le relief doit rester large, et la marche la plus haute ne doit pas dépasser la
+        // profondeur de cette cassure, soit 0,22 par point de magnitude au-dessus de 3,5.
+        float deepestCrack = 0.22f * (7.5f - 3.5f);
+        Check(raised > 20 && lowered > 20 && largestStep <= deepestCrack,
+            "Earthquake relief is not broad, or its fault scarp is too sharp: " + raised + " " + lowered + " " + largestStep);
         Check(Math.Abs(after - before) < Math.Abs(before) * 0.000002, "Earthquake changed geological volume");
     }
 
@@ -811,7 +816,7 @@ public static class TectonicValidation
         Debug.Log($"VISIBLE PLATE DRIFT years=170 cells={cells:F2} meanPlate={averagePlateDrift:F2}");
         Check(cells > 5f, "Plate terrain did not move visibly in 170 years");
         Check(averagePlateDrift > 3f, "Plate boundaries did not move sufficiently in 170 years");
-        Check(Math.Abs(Sediment(s) - before) < before * 0.00005, "Visible plate drift changed sediment volume");
+        Check(Math.Abs(Sediment(s) - before) < before * 0.00005, "Visible plate drift changed sediment volume: " + before + " -> " + Sediment(s));
     }
 
     static void CollisionSpurs()

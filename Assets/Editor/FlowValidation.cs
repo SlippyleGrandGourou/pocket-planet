@@ -583,6 +583,8 @@ public static class FlowValidation
     {
         var s = new PlanetSim(new PlanetGrid(12, 56.25f));
         s.tectonics = true; s.kThermal = 0f; s.weathering = 0f;
+        // StepGeology en mode tectonique lit les tampons alloués par InitPlates (rockN, orogenyHeightVariance...).
+        typeof(PlanetSim).GetMethod("InitPlates", Private).Invoke(s, new object[] { new System.Random(1) });
         s.conv = new float[s.M]; s.rift = new float[s.M];
         int c = s.G.CellIndex(0, 5, 5);
         s.rock[c] = 20f; s.rift[c] = 1f; s.riftSink = 0.00008f;

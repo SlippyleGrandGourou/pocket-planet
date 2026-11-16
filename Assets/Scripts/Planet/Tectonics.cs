@@ -619,11 +619,15 @@ namespace LivingPlanet
                             sc = fallback >= 0 ? fallback : sc;
                         }
                         rockTN[c] = rockT[sc]; oreN[c] = ore[sc];
-                        rockN[c] = rock[sc]; sedN[c] = sed[sc]; hardN[c] = hard[sc];
+                        // Roche, sédiment et composition restent sur place : AdvectCrust les a déjà transportés
+                        // à la vitesse de la plaque, en conservant le volume. Les recopier ici en plus déplaçait
+                        // le relief près de trois fois plus vite que la plaque et perdait de la matière à chaque
+                        // saut (69 % du sédiment en 170 ans dans VisibleDriftOver170Years).
+                        rockN[c] = rock[c]; sedN[c] = sed[c]; hardN[c] = hard[sc];
                         magmaN[c] = magma[sc];
                         mantleSolidN[c] = mantleSolid[sc]; mantleResidualN[c] = mantleResidual[sc];
                         int b = c * 4, sb = sc * 4;
-                        mixN[b] = mix[sb]; mixN[b + 1] = mix[sb + 1]; mixN[b + 2] = mix[sb + 2]; mixN[b + 3] = mix[sb + 3];
+                        mixN[b] = mix[b]; mixN[b + 1] = mix[b + 1]; mixN[b + 2] = mix[b + 2]; mixN[b + 3] = mix[b + 3];
                         int lc = c * layers, lsc = sc * layers;
                         for (int k = 0; k < layers; k++) subductionLayersN[lc + k] = subductionLayers[lsc + k];
                     }

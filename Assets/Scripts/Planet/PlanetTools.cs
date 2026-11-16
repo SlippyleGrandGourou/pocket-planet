@@ -53,14 +53,16 @@ namespace LivingPlanet
 
         bool ToolArmed { get { return toolTab >= 0 && toolTab <= 4; } }
 
-        string[] LiveNames
+        static string[] liveNames;
+        static string[] LiveNames
         {
             get
             {
+                if (liveNames != null) return liveNames;
                 var l = new List<string>();
                 for (int i = 0; i < PlantNames.Length; i++) l.Add("🌿 " + PlantNames[i]);
                 for (int i = 0; i < global::LivingPlanet.Fauna.Count; i++) l.Add("🐾 " + global::LivingPlanet.Fauna.Names[i]);
-                return l.ToArray();
+                return liveNames = l.ToArray();
             }
         }
 
@@ -142,15 +144,15 @@ namespace LivingPlanet
 
         void DrawTools()
         {
-            float width = Mathf.Min(700f, Mathf.Max(250f, Screen.width - MapWidth - 42f));
-            float centeredWidth = Screen.width - 2f * (MapWidth + 22f);
+            float width = Mathf.Min(700f, Mathf.Max(250f, UiW - MapWidth - 42f));
+            float centeredWidth = UiW - 2f * (MapWidth + 22f);
             if (centeredWidth >= 350f) width = Mathf.Min(width, centeredWidth);
             int columns = width >= 570f ? ToolTabs.Length : 3;
             int toolbarRows = (ToolTabs.Length + columns - 1) / columns;
             float height = 12f + toolbarRows * 38f + 38f;
-            float centeredX = (Screen.width - width) / 2f;
-            float x = Mathf.Max(10f, Mathf.Min(centeredX, Screen.width - MapWidth - 30f - width));
-            toolbarRect = new Rect(x, Screen.height - height - 12f, width, height);
+            float centeredX = (UiW - width) / 2f;
+            float x = Mathf.Max(10f, Mathf.Min(centeredX, UiW - MapWidth - 30f - width));
+            toolbarRect = new Rect(x, UiH - height - 12f, width, height);
             FillRect(toolbarRect, new Color(0f, 0f, 0f, 0.6f));
             float cellWidth = (width - 12f) / columns;
             for (int i = 0; i < ToolTabs.Length; i++)
@@ -241,9 +243,9 @@ namespace LivingPlanet
 
         void DrawToolStatus()
         {
-            float width = Mathf.Min(420f, Screen.width - 20f);
-            float x = (Screen.width - width) / 2f, y = 96f;
-            var center = new GUIStyle(style) { alignment = TextAnchor.MiddleCenter, fontSize = 12 };
+            float width = Mathf.Min(420f, UiW - 20f);
+            float x = (UiW - width) / 2f, y = 96f;
+            var center = statusStyle;
             if (ToolArmed)
             {
                 string t = toolTab == 4 ? "Souffle actif : maintenez le clic" : "Outil « " + ToolTabs[toolTab] + " » actif : cliquez sur la planète (Échap pour quitter)";

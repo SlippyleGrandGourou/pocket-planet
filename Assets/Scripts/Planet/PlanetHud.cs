@@ -50,6 +50,7 @@ namespace LivingPlanet
         readonly float[] resBuf = new float[4];
         int graphTab;
         Rect layerRect, mapRect, mapPanelRect;
+        float[] graphBins;
         int lastQuakes, lastSlides;
         Texture2D mapTexture;
         PlanetGrid mapGrid;
@@ -280,7 +281,7 @@ namespace LivingPlanet
             {
                 Vector2 size = tooltip.CalcSize(new GUIContent(hoverName));
                 Rect tip = new Rect(mouse.x - size.x / 2f - 5f, mouse.y - size.y - 22f, size.x + 10f, size.y + 4f);
-                tip.x = Mathf.Clamp(tip.x, 4f, Screen.width - tip.width - 4f);
+                tip.x = Mathf.Clamp(tip.x, 4f, UiW - tip.width - 4f);
                 tip.y = Mathf.Max(4f, tip.y);
                 FillRect(tip, new Color(0f, 0f, 0f, 0.85f));
                 GUI.Label(tip, hoverName, tooltip);
@@ -373,7 +374,9 @@ namespace LivingPlanet
             if (cnt < 2) { GUI.Label(new Rect(r.x + 8f, r.y + 8f, r.width, 24f), "Collecte des données...", style); return; }
             int bins = Mathf.Max(2, Mathf.Min(cnt, Mathf.FloorToInt(pr.width / 3f)));
             float colW = pr.width / bins;
-            var bv = new float[bins];
+            if (graphBins == null || graphBins.Length < bins) graphBins = new float[bins];
+            var bv = graphBins;
+            System.Array.Clear(bv, 0, bins);
 
             // échelle partagée : maximum des moyennes affichées
             float gmax = 1e-6f;
@@ -409,9 +412,11 @@ namespace LivingPlanet
                     {
                         float y = pr.yMax - Mathf.Clamp01((bv[b] - lo) / (hi - lo)) * (pr.height - 2f) - 2f;
                         float x = pr.x + b * colW;
-                        float y0 = b == 0 ? y : Mathf.Min(y, prevY);
-                        float hgt = b == 0 ? 2f : Mathf.Abs(y - prevY) + 2f;
-                        FillRect(new Rect(x, y0, Mathf.Max(2f, colW + 0.5f), hgt), sr.col);
+                        // Courbe en escalier : un palier sur la largeur de la colonne, relié au précédent par un
+                        // trait vertical fin. Remplir toute la colonne entre les deux valeurs donnait de gros
+                        // pavés pleins dès que l'historique comptait peu de points (début de partie).
+                        FillRect(new Rect(x, y, Mathf.Max(2f, colW + 0.5f), 2f), sr.col);
+                        if (b > 0) FillRect(new Rect(x, Mathf.Min(y, prevY), 2f, Mathf.Abs(y - prevY) + 2f), sr.col);
                         prevY = y;
                     }
                 }
@@ -419,7 +424,7 @@ namespace LivingPlanet
 
             // axes : repères horizontaux, valeur max (échelle partagée) et durée couverte
             for (int g = 0; g <= 2; g++) FillRect(new Rect(pr.x, pr.y + g * (pr.height - 2f) / 2f, pr.width, 1f), new Color(1f, 1f, 1f, 0.12f));
-            var small = new GUIStyle(style) { fontSize = 11 };
+            var small = smallStyle;
             if (shared) GUI.Label(new Rect(r.x + 2f, pr.y - 4f, 34f, 16f), gmax >= 100f ? gmax.ToString("0") : gmax.ToString("0.#"), small);
             float spanDays = longTerm ? cnt * (LongEvery / (float)SamplesPerDay) : cnt / (float)SamplesPerDay;
             string span = spanDays >= 1f ? "−" + spanDays.ToString("0.#") + " j" : "−" + (spanDays * 24f).ToString("0") + " h";
@@ -458,7 +463,7 @@ namespace LivingPlanet
             const float headerHeight = 22f;
             float gridHeight = rows * IconCell;
             float height = headerHeight + gridHeight + 8f;
-            mapPanelRect = new Rect(Screen.width - width - 10f, Screen.height - height - ToggleRowHeight - MapHeight - 18f, width, height + ToggleRowHeight + MapHeight + 12f);
+            mapPanelRect = new Rect(UiW - width - 10f, UiH - height - ToggleRowHeight - MapHeight - 18f, width, height + ToggleRowHeight + MapHeight + 12f);
             layerRect = new Rect(mapPanelRect.x, mapPanelRect.y, width, height);
             FillRect(mapPanelRect, new Color(0.03f, 0.04f, 0.07f, 0.78f));
             FillRect(new Rect(mapPanelRect.x, mapPanelRect.y, width, 1f), new Color(1f, 1f, 1f, 0.2f));
@@ -506,7 +511,7 @@ namespace LivingPlanet
             {
                 Vector2 size = tooltip.CalcSize(new GUIContent(hoverName));
                 Rect tip = new Rect(mouse.x - size.x / 2f - 5f, mouse.y - size.y - 22f, size.x + 10f, size.y + 4f);
-                tip.x = Mathf.Clamp(tip.x, 4f, Screen.width - tip.width - 4f);
+                tip.x = Mathf.Clamp(tip.x, 4f, UiW - tip.width - 4f);
                 tip.y = Mathf.Max(4f, tip.y);
                 FillRect(tip, new Color(0f, 0f, 0f, 0.85f));
                 GUI.Label(tip, hoverName, tooltip);
@@ -608,12 +613,12 @@ namespace LivingPlanet
                 "  rift " + (Sim.rift == null ? 0f : Sim.rift[c]).ToString("0.00") + "\n" +
                 "Végétation " + vegetation + "  couverture " + Sim.cover[c].ToString("0.00") + "\n" +
                 "Faune " + (animals.Length == 0 ? "aucune" : animals.ToString());
-            Vector2 pointer = locked ? new Vector2(Screen.width * 0.5f, Screen.height * 0.5f) : Event.current.mousePosition;
-            float width = Mathf.Min(390f, Screen.width - 8f), height = 190f;
+            Vector2 pointer = locked ? new Vector2(UiW * 0.5f, UiH * 0.5f) : Event.current.mousePosition;
+            float width = Mathf.Min(390f, UiW - 8f), height = 190f;
             float x = pointer.x + 18f;
             float y = pointer.y + 18f;
-            if (x + width > Screen.width - 4f) x = pointer.x - width - 18f;
-            if (y + height > Screen.height - 4f) y = pointer.y - height - 18f;
+            if (x + width > UiW - 4f) x = pointer.x - width - 18f;
+            if (y + height > UiH - 4f) y = pointer.y - height - 18f;
             var rect = new Rect(Mathf.Max(4f, x), Mathf.Max(4f, y), width, height);
             FillRect(rect, new Color(0f, 0f, 0f, 0.85f));
             GUI.Label(new Rect(rect.x + 6f, rect.y + 4f, rect.width - 12f, rect.height - 8f), text, style);

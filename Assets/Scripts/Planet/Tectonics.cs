@@ -62,6 +62,15 @@ namespace LivingPlanet
 
         // Hash spatial pur (statique, ne dérive pas dans le temps) donnant une valeur déterministe dans [0,1)
         // pour une cellule et un usage (`salt`) donnés — sert de base aux variantes "figées par lieu".
+        // Tirage déterministe dans [0, 1[ propre à une cellule et à un pas de simulation. Entièrement en entiers :
+        // un sinus en virgule flottante de `tick * constante` perd sa partie fractionnaire après quelques
+        // centaines d'années simulées, et des cellules voisines finissent par partager le même tirage.
+        static float TickHashUnit(int c, int tick, uint salt)
+        {
+            uint h = MixHash((uint)c * 374761393u ^ (uint)tick * 2246822519u ^ salt);
+            return (h & 0x00ffffffu) / 16777216f;
+        }
+
         static float CellHashUnit(int c, uint salt)
         {
             return MixHash((uint)c ^ salt) / (float)uint.MaxValue;

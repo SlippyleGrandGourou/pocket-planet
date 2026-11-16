@@ -234,7 +234,7 @@ namespace LivingPlanet
                     exposure *= 1f - Mathf.Clamp01(water[c] * 2f);
                     float erodible = Mathf.Clamp01(sand + dirt * 0.65f + clay * 0.25f + gravel * 0.1f);
 
-                    float random = Mathf.Repeat(Mathf.Sin((c + 1) * 31.7f + tick * 17.13f) * 15731.743f, 1f);
+                    float random = TickHashUnit(c, tick, 0xAE011A4u);
                     int maxDistance = Mathf.Clamp(1 + Mathf.FloorToInt(excess * 5f), 1, 5);
                     int distance = 1 + Mathf.FloorToInt(random * maxDistance);
                     int destination = c;

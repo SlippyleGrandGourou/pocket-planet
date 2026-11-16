@@ -752,7 +752,7 @@ namespace LivingPlanet
                         else
                         {
                             // Le dépôt probabiliste fait varier la distance parcourue selon le débit et la granulométrie.
-                            float random = Mathf.Repeat(Mathf.Sin((c + 1) * 12.9898f + tick * 78.233f) * 43758.547f, 1f);
+                            float random = TickHashUnit(c, tick, 0xD3905E7u);
                             float settling = Kd_ * Mathf.Lerp(0.35f, 1.65f, random) *
                                 (0.25f + 0.75f * Mathf.Clamp01(grain)) / (0.4f + q + flux[c]);
                             float dep = (sp - cap) * Mathf.Clamp(settling, 0.02f, 0.6f);

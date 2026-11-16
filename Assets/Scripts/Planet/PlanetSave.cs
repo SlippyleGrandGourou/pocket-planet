@@ -19,6 +19,40 @@ namespace LivingPlanet
         public static string SaveDirectory { get { return Path.Combine(Application.persistentDataPath, "Planets"); } }
         public static string NewPath() { return Path.Combine(SaveDirectory, Guid.NewGuid().ToString("N") + ".save"); }
 
+        // Avant d'être renommé, le jeu enregistrait sous « DefaultCompany/My project ». Au premier lancement
+        // sous le nouveau nom, les planètes de l'ancien dossier sont copiées (rien n'y est supprimé). Un fichier
+        // témoin évite de recommencer : sans lui, une planète supprimée reviendrait à chaque démarrage.
+        public static void AdoptLegacySaves()
+        {
+            try
+            {
+                string current = Application.persistentDataPath;
+                string marker = Path.Combine(current, "legacy-saves-imported");
+                if (File.Exists(marker)) return;
+                string root = Path.GetDirectoryName(Path.GetDirectoryName(current));
+                string legacy = string.IsNullOrEmpty(root) ? null : Path.Combine(root, "DefaultCompany", "My project");
+                if (legacy != null && Directory.Exists(legacy) && Path.GetFullPath(legacy) != Path.GetFullPath(current))
+                {
+                    CopyIfMissing(Path.Combine(legacy, "planet.save"), PathName);
+                    string legacyPlanets = Path.Combine(legacy, "Planets");
+                    if (Directory.Exists(legacyPlanets))
+                    {
+                        Directory.CreateDirectory(SaveDirectory);
+                        foreach (string file in Directory.GetFiles(legacyPlanets, "*.save"))
+                            CopyIfMissing(file, Path.Combine(SaveDirectory, Path.GetFileName(file)));
+                    }
+                }
+                Directory.CreateDirectory(current);
+                File.WriteAllText(marker, "");
+            }
+            catch (Exception e) { Debug.LogException(e); }
+        }
+
+        static void CopyIfMissing(string from, string to)
+        {
+            if (File.Exists(from) && !File.Exists(to)) File.Copy(from, to);
+        }
+
         public sealed class Preview
         {
             public const int Width = 128, Height = 64;

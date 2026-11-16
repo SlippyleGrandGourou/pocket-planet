@@ -107,6 +107,7 @@ namespace LivingPlanet
             cam.backgroundColor = new Color(0.01f, 0.012f, 0.03f);
             Application.targetFrameRate = 120;
             Application.wantsToQuit += WantsToQuit;
+            PlanetSave.AdoptLegacySaves();
             menuPreviewSeed = UnityEngine.Random.Range(1, 1000000);
         }
 

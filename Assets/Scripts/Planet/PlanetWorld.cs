@@ -989,8 +989,6 @@ namespace LivingPlanet
             return true;
         }
 
-        void OnDestroy() { Application.wantsToQuit -= WantsToQuit; }
-
         void OnApplicationQuit()
         {
             if (ready && !quitSaved) { if (SavePlanet()) quitSaved = true; }

@@ -99,8 +99,11 @@ namespace LivingPlanet
 
         // atmosphère / nuages / rivières / faune / tsunami
         readonly float AtmoThickness;
+        // Part de l'intensité du ciel conservée quand la planète est vue de l'espace.
+        const float OrbitAtmoGain = 0.12f;
         bool atmoShader;
         GameObject atmoIn, atmoOut, atmoFallback;
+        float atmoShellRadius;
         float cloudTimer;
         struct Drop { public Vector3 dir; public float life; }
         Drop[] drops = new Drop[1200];
@@ -113,7 +116,12 @@ namespace LivingPlanet
         public PlanetView(PlanetWorld w, Camera camera)
         {
             G = w.Grid; S = w.Sim; E = w.Eco; Fa = w.Fauna; R = G.Radius; cam = camera; HeightScale = Mathf.Clamp(R / 1200f, 0.6f, 2f); AtmoThickness = 300f * HeightScale;
-            SkyDist = Mathf.Max(5000f, 2500f + R * 0.8f + 1800f);
+            // Le point de la planète le plus éloigné que la caméra puisse voir est son horizon au zoom arrière
+            // maximal : étoiles, soleil et lune doivent rester au-delà, sinon ils se dessinent devant le bord
+            // du disque planétaire (c'était le cas dès un rayon de 2000).
+            float farthestCamera = R + w.MaxCamAlt;
+            float farthestHorizon = Mathf.Sqrt(farthestCamera * farthestCamera - R * R);
+            SkyDist = Mathf.Max(5000f, farthestHorizon + 1500f);
         }
 
         public void MarkDirty() { for (int f = 0; f < 6; f++) faces[f].dirty = true; }
@@ -402,7 +410,8 @@ namespace LivingPlanet
                 amr.shadowCastingMode = ShadowCastingMode.Off;
                 return;
             }
-            var mesh = BuildGridMesh(64, ra * 1.04f, -1);
+            atmoShellRadius = ra * 1.04f;
+            var mesh = BuildGridMesh(64, atmoShellRadius, -1);
             GameObject Make(string name, float cull)
             {
                 var go = new GameObject(name);
@@ -542,7 +551,8 @@ namespace LivingPlanet
             var sr = sunDiscR;
             sr.sharedMaterial = MakeUnlit(new Color(1f, 0.95f, 0.75f));
             sr.shadowCastingMode = ShadowCastingMode.Off;
-            sunGo.transform.localScale = Vector3.one * 110f;
+            // Taille proportionnelle à la distance : le disque garde la même taille apparente quel que soit le rayon.
+            sunGo.transform.localScale = Vector3.one * (110f * (SkyDist - 500f) / 4500f);
             sunDiscT = sunGo.transform;
 
             // la lune est éclairée par la lumière du soleil : ses phases viennent de leur position relative
@@ -555,7 +565,7 @@ namespace LivingPlanet
             mr.sharedMaterial = MakeLit(new Color(0.78f, 0.78f, 0.8f), 0f, false);
             mr.shadowCastingMode = ShadowCastingMode.Off;
             mr.receiveShadows = false;
-            moonGo.transform.localScale = Vector3.one * 60f;
+            moonGo.transform.localScale = Vector3.one * (60f * (SkyDist - 700f) / 4300f);
             moonT = moonGo.transform;
         }
 
@@ -1085,7 +1095,9 @@ namespace LivingPlanet
         {
             float decl = visDecl;
             float cd = Mathf.Cos(decl);
-            SunDir = new Vector3(cd * Mathf.Cos(dayAngle), Mathf.Sin(decl), cd * Mathf.Sin(dayAngle)).normalized;
+            // La planète tourne vers l'est (longitudes croissantes) : vu du sol, le soleil se lève à l'est et
+            // parcourt le ciel vers l'ouest, donc sa longitude décroît quand dayAngle augmente.
+            SunDir = new Vector3(cd * Mathf.Cos(dayAngle), Mathf.Sin(decl), -cd * Mathf.Sin(dayAngle)).normalized;
             sun.transform.rotation = Quaternion.LookRotation(-SunDir);
 
             float alt = camPos.magnitude - R;
@@ -1128,7 +1140,14 @@ namespace LivingPlanet
                 cloudHere = Mathf.Clamp01((cloudHere / 5f - 0.2f) / 0.8f) * Atmo;
                 skyCloud = Mathf.Lerp(skyCloud, cloudHere, 0.02f);
                 Shader.SetGlobalFloat("_LP_Cloud", skyCloud);
-                bool inside = alt < AtmoThickness;
+                // L'intensité du ciel est réglée pour être vue du sol. Vue du dessus, la même lumière diffusée
+                // s'ajoute à l'image du terrain et le noyait sous un voile blanc-bleu : on la réduit
+                // progressivement à mesure que la caméra monte et sort de l'atmosphère.
+                float leaving = Mathf.SmoothStep(0f, 1f, Mathf.InverseLerp(0.25f * AtmoThickness, 1.5f * AtmoThickness, alt));
+                Shader.SetGlobalFloat("_LP_AtmoGain", Mathf.Lerp(1f, OrbitAtmoGain, leaving));
+                // "Dedans" se juge par rapport à la coque réellement dessinée, pas au sommet de l'atmosphère :
+                // entre les deux, la caméra est dans la coque et sa face externe, seule affichée, est invisible.
+                bool inside = camPos.magnitude < atmoShellRadius;
                 atmoIn.SetActive(ShowAtmosphere && inside);
                 atmoOut.SetActive(ShowAtmosphere && !inside);
             }
@@ -1138,12 +1157,12 @@ namespace LivingPlanet
             sunDiscT.position = camPos + SunDir * (SkyDist - 500f);
             float lamS = 2f * Mathf.PI * vDays / DaysPerYear;
             // la voûte céleste tourne autour de l'axe des pôles (jour sidéral = jour solaire + dérive annuelle)
-            starsT.rotation = Quaternion.AngleAxis(-(dayAngle + lamS) * Mathf.Rad2Deg, Vector3.up);
+            starsT.rotation = Quaternion.AngleAxis((dayAngle + lamS) * Mathf.Rad2Deg, Vector3.up);
             float phi = 2f * Mathf.PI * vDays / MoonPeriodDays + Mathf.PI;
             // orbite lunaire inclinée de 5° dont la ligne des nœuds est alignée avec 2 des 4 pleines lunes de l'année
             float decM = S.AxialTilt * Mathf.Sin(lamS + phi) + 5f * Mathf.Deg2Rad * Mathf.Sin(lamS + phi);
             float cm = Mathf.Cos(decM), raM = dayAngle + phi;
-            MoonDir = new Vector3(cm * Mathf.Cos(raM), Mathf.Sin(decM), cm * Mathf.Sin(raM)).normalized;
+            MoonDir = new Vector3(cm * Mathf.Cos(raM), Mathf.Sin(decM), -cm * Mathf.Sin(raM)).normalized;
             moonT.position = camPos + MoonDir * (SkyDist - 700f);
             float sep = Vector3.Angle(MoonDir, -SunDir);
             EclipseAmount = Mathf.MoveTowards(EclipseAmount, 1f - Mathf.Clamp01(sep / 4f), 0.1f);

@@ -315,8 +315,8 @@ namespace LivingPlanet
         void DrawSavedPlanets()
         {
             if (selectedPlanet >= 0) DrawPlanetPreview(savedPlanets[selectedPlanet]);
-            float width = Mathf.Min(460f, Mathf.Max(200f, Screen.width - 20f));
-            Rect panel = new Rect(10f, 10f, width, Mathf.Max(150f, Screen.height - 20f));
+            float width = Mathf.Min(460f, Mathf.Max(200f, UiW - 20f));
+            Rect panel = new Rect(10f, 10f, width, Mathf.Max(150f, UiH - 20f));
             FillRect(panel, new Color(0f, 0f, 0f, 0.72f));
             GUI.Label(new Rect(panel.x + 10f, panel.y + 8f, width - 20f, 40f), "Planètes sauvegardées", title);
             float listHeight = Mathf.Max(30f, panel.height - 210f);
@@ -366,9 +366,9 @@ namespace LivingPlanet
         {
             if (deleteConfirmIndex < 0 || deleteConfirmIndex >= savedPlanets.Count) return;
             var p = savedPlanets[deleteConfirmIndex];
-            FillRect(new Rect(0f, 0f, Screen.width, Screen.height), new Color(0f, 0f, 0f, 0.5f));
+            FillRect(new Rect(0f, 0f, UiW, UiH), new Color(0f, 0f, 0f, 0.5f));
             float w = 380f, h = 150f;
-            Rect r = new Rect((Screen.width - w) / 2f, (Screen.height - h) / 2f, w, h);
+            Rect r = new Rect((UiW - w) / 2f, (UiH - h) / 2f, w, h);
             FillRect(r, new Color(0.1f, 0.03f, 0.03f, 0.92f));
             string msg = "Supprimer définitivement la planète " + p.seed + " (" + p.savedAt.ToString("g") + ") ?\nCette action est irréversible.";
             GUI.Label(new Rect(r.x + 16f, r.y + 12f, w - 32f, 80f), msg, new GUIStyle(style) { wordWrap = true });
@@ -448,8 +448,8 @@ namespace LivingPlanet
                 previewTexture.Apply(false, false);
                 previewRefreshAt = Time.realtimeSinceStartup + 0.08f;
             }
-            float display = Mathf.Min(Screen.height * 0.82f, Screen.width * 0.72f);
-            Rect dr = displayRect ?? new Rect(Screen.width - display - 20f, (Screen.height - display) / 2f, display, display);
+            float display = Mathf.Min(UiH * 0.82f, UiW * 0.72f);
+            Rect dr = displayRect ?? new Rect(UiW - display - 20f, (UiH - display) / 2f, display, display);
             float glowSize = dr.width * 1.5f;
             GUI.DrawTexture(new Rect(dr.center.x - glowSize / 2f, dr.center.y - glowSize / 2f, glowSize, glowSize), GlowTexture());
             GUI.DrawTexture(dr, previewTexture);
@@ -460,12 +460,12 @@ namespace LivingPlanet
         {
             if (loadingPreview != null && loadingPreview.pixels != null)
             {
-                float display = Mathf.Min(Screen.height * 0.5f, Screen.width * 0.4f);
-                Rect dr = new Rect((Screen.width - display) / 2f, (Screen.height - display) / 2f - 30f, display, display);
+                float display = Mathf.Min(UiH * 0.5f, UiW * 0.4f);
+                Rect dr = new Rect((UiW - display) / 2f, (UiH - display) / 2f - 30f, display, display);
                 DrawPlanetPreview(loadingPreview, dr);
                 int dots = 1 + Mathf.FloorToInt(Time.unscaledTime * 2f) % 3;
                 var loadStyle = new GUIStyle(style) { fontSize = 18, alignment = TextAnchor.MiddleCenter };
-                GUI.Label(new Rect(0f, dr.yMax + 18f, Screen.width, 28f), status + new string('.', dots), loadStyle);
+                GUI.Label(new Rect(0f, dr.yMax + 18f, UiW, 28f), status + new string('.', dots), loadStyle);
             }
             else GUI.Label(new Rect(20, 20, 800, 30), status, style);
             DrawLoadProgressBars();
@@ -479,11 +479,11 @@ namespace LivingPlanet
             int count = loadPhaseNames.Length;
             if (count <= 0) return;
             float margin = 20f, gap = 10f;
-            float totalW = Mathf.Min(Screen.width - margin * 2f, 900f);
+            float totalW = Mathf.Min(UiW - margin * 2f, 900f);
             float barW = (totalW - gap * (count - 1)) / count;
             float barH = 14f;
-            float y = Screen.height - barH - 34f;
-            float x0 = (Screen.width - totalW) / 2f;
+            float y = UiH - barH - 34f;
+            float x0 = (UiW - totalW) / 2f;
             var nameStyle = new GUIStyle(style) { fontSize = 11, alignment = TextAnchor.UpperCenter };
             for (int i = 0; i < count; i++)
             {

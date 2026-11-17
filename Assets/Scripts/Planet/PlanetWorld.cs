@@ -42,7 +42,7 @@ namespace LivingPlanet
         int resIdx = 2, radIdx = 1;
         static readonly float[] RadOptions = { 600f, 1200f, 2000f, 3000f, 4000f };
         static readonly string[] RadNames = { "Petite (600)", "Grande (1200)", "Géante (2000)", "Colossale (3000)", "Immense (4000)" };
-        float MaxCamAlt { get { return 2500f + radius * 0.8f; } }
+        internal float MaxCamAlt { get { return 2500f + radius * 0.8f; } }
         string seedText = "";
         public string planetName = "";
         bool renamingPlanet, renameFocused;
@@ -107,6 +107,7 @@ namespace LivingPlanet
             cam.backgroundColor = new Color(0.01f, 0.012f, 0.03f);
             Application.targetFrameRate = 120;
             Application.wantsToQuit += WantsToQuit;
+            PlanetSave.AdoptLegacySaves();
             menuPreviewSeed = UnityEngine.Random.Range(1, 1000000);
         }
 
@@ -335,7 +336,7 @@ namespace LivingPlanet
             float angle = 2f * Mathf.PI * day;
             float declination = Sim.Declination;
             float cosDeclination = Mathf.Cos(declination);
-            Fauna.sunDir = new Vector3(cosDeclination * Mathf.Cos(angle), Mathf.Sin(declination), cosDeclination * Mathf.Sin(angle));
+            Fauna.sunDir = new Vector3(cosDeclination * Mathf.Cos(angle), Mathf.Sin(declination), -cosDeclination * Mathf.Sin(angle));
             float days = DaysPerYear / PlanetSim.TicksPerYear / FaunaSubstepsPerTick;
             for (int i = 0; i < FaunaSubstepsPerTick; i++) Fauna.Step(days * FaunaSecondsPerDay, days);
             if (Sim.tick % 5 == 0) Sim.StepGas();
@@ -691,11 +692,20 @@ namespace LivingPlanet
         static readonly string[] ToggleNames = { "Plantes", "Nuages", "Scattering atmosphérique" };
         static readonly string[] ToggleIcons = { "🌿", "☁", "✨" };
         GUIStyle style, btn, title, box, evBtn, iconBtn, tooltip;
+        // Variantes de `style` utilisées à chaque image : créées une fois, pas à chaque événement d'interface.
+        GUIStyle wrapStyle, infoStyle, centerStyle, centerBoldStyle, statusStyle, smallStyle;
+
+        // L'interface est dessinée pour un écran de 1080 lignes, puis agrandie d'un bloc sur les écrans plus
+        // hauts : sans cela elle garde sa taille en pixels et devient illisible en 1440p ou en 4K.
+        float uiScale = 1f;
+        float UiW { get { return Screen.width / uiScale; } }
+        float UiH { get { return Screen.height / uiScale; } }
 
         bool MouseOverUi(Mouse ms)
         {
             Vector2 p = ms.position.ReadValue();
             p.y = Screen.height - p.y;
+            p /= uiScale;
             return toolRect.Contains(p) || toolbarRect.Contains(p) || eventsRect.Contains(p) || mapPanelRect.Contains(p) ||
                 dialRect.Contains(p) || infoRect.Contains(p);
         }
@@ -712,11 +722,11 @@ namespace LivingPlanet
                 if (now - e.t > 45f) continue;
                 string text = e.text.StartsWith("☄ ") ? e.text.Substring(2) : e.text;
                 string label = EventSymbol(text) + " " + text;
-                float width = Mathf.Min(Mathf.Min(420f, Screen.width * 0.48f), evBtn.CalcSize(new GUIContent(label)).x + 18f);
+                float width = Mathf.Min(Mathf.Min(420f, UiW * 0.48f), evBtn.CalcSize(new GUIContent(label)).x + 18f);
                 if (GUI.Button(new Rect(15, y, width, 25), label, evBtn) && e.cell >= 0) FocusOn(e.cell);
                 y += 27f;
             }
-            if (y > 15f) eventsRect = new Rect(15, 15, Mathf.Min(420f, Screen.width * 0.48f), y - 15f);
+            if (y > 15f) eventsRect = new Rect(15, 15, Mathf.Min(420f, UiW * 0.48f), y - 15f);
         }
 
         static string EventSymbol(string text)
@@ -746,6 +756,12 @@ namespace LivingPlanet
             tooltip = new GUIStyle(style) { fontSize = 12, alignment = TextAnchor.MiddleCenter, richText = false };
             tooltip.normal.textColor = Color.white;
             link = new GUIStyle(style) { richText = true, alignment = TextAnchor.MiddleLeft, clipping = TextClipping.Clip };
+            wrapStyle = new GUIStyle(style) { wordWrap = true };
+            infoStyle = new GUIStyle(style) { wordWrap = true, fontSize = 13 };
+            centerStyle = new GUIStyle(style) { alignment = TextAnchor.MiddleCenter };
+            centerBoldStyle = new GUIStyle(style) { alignment = TextAnchor.MiddleCenter, fontStyle = FontStyle.Bold };
+            statusStyle = new GUIStyle(style) { alignment = TextAnchor.MiddleCenter, fontSize = 12 };
+            smallStyle = new GUIStyle(style) { fontSize = 11 };
         }
 
         // ----------------------------------------------------------- menu principal : texte sélectionnable + panneau arrondi
@@ -805,9 +821,9 @@ namespace LivingPlanet
 
         void BeginMenuPanel(float w, float h, ref Vector2 scroll, out Rect r)
         {
-            float width = Mathf.Min(w, Mathf.Max(1f, Screen.width - 20f));
-            float height = Mathf.Min(h, Mathf.Max(1f, Screen.height - 20f));
-            Rect panel = new Rect((Screen.width - width) / 2f, (Screen.height - height) / 2f, width, height);
+            float width = Mathf.Min(w, Mathf.Max(1f, UiW - 20f));
+            float height = Mathf.Min(h, Mathf.Max(1f, UiH - 20f));
+            Rect panel = new Rect((UiW - width) / 2f, (UiH - height) / 2f, width, height);
             var old = GUI.color;
             GUI.color = new Color(0f, 0f, 0f, 0.75f);
             GUI.DrawTexture(panel, Texture2D.whiteTexture);
@@ -823,8 +839,8 @@ namespace LivingPlanet
             if (!selectingPlanet) RefreshMenuPreviewIfNeeded();
 
             float margin = 24f;
-            float panelW = Mathf.Min(420f, Screen.width * 0.42f);
-            Rect panel = new Rect(margin, margin, panelW, Screen.height - margin * 2f);
+            float panelW = Mathf.Min(420f, UiW * 0.42f);
+            Rect panel = new Rect(margin, margin, panelW, UiH - margin * 2f);
             DrawRoundedPanel(panel, 26f, new Color(0.04f, 0.05f, 0.08f, 0.82f));
 
             Rect content = new Rect(panel.x + 34f, panel.y + 26f, panel.width - 68f, panel.height - 52f);
@@ -890,9 +906,9 @@ namespace LivingPlanet
 
             if (!selectingPlanet && menuPreview != null)
             {
-                float display = Mathf.Min(Screen.height * 0.72f, (Screen.width - panel.xMax - margin) * 0.85f);
+                float display = Mathf.Min(UiH * 0.72f, (UiW - panel.xMax - margin) * 0.85f);
                 display = Mathf.Max(80f, display);
-                Rect pr = new Rect(panel.xMax + (Screen.width - panel.xMax - display) / 2f, (Screen.height - display) / 2f, display, display);
+                Rect pr = new Rect(panel.xMax + (UiW - panel.xMax - display) / 2f, (UiH - display) / 2f, display, display);
                 DrawPlanetPreview(menuPreview, pr);
             }
         }
@@ -922,7 +938,7 @@ namespace LivingPlanet
             if (GUI.Button(new Rect(r.x + 30, y, 300, 44), "Quitter", btn)) QuitGame();
             y += 56;
             GUI.Label(new Rect(r.x + 30, y, 300, 40), string.IsNullOrEmpty(saveMessage) ?
-                "Sauvegarde automatique toutes les 5 minutes." : saveMessage, new GUIStyle(style) { wordWrap = true });
+                "Sauvegarde automatique toutes les 5 minutes." : saveMessage, wrapStyle);
             GUI.EndScrollView();
         }
 
@@ -931,9 +947,9 @@ namespace LivingPlanet
         // fenêtre glissante jour/saison/année, pour suivre une évolution de long terme (ex. climat, géologie).
         void DrawStatsScreen()
         {
-            FillRect(new Rect(0f, 0f, Screen.width, Screen.height), new Color(0.015f, 0.018f, 0.035f, 0.97f));
+            FillRect(new Rect(0f, 0f, UiW, UiH), new Color(0.015f, 0.018f, 0.035f, 0.97f));
             float pad = 24f;
-            var r = new Rect(pad, pad, Screen.width - pad * 2f, Screen.height - pad * 2f);
+            var r = new Rect(pad, pad, UiW - pad * 2f, UiH - pad * 2f);
             GUI.Label(new Rect(r.x, r.y, r.width - 140f, 44f), "Statistiques", title);
             if (GUI.Button(new Rect(r.xMax - 120f, r.y + 6f, 120f, 36f), "Fermer (Échap)", btn)) showStats = false;
 
@@ -961,13 +977,14 @@ namespace LivingPlanet
         // indépendante du menu pause et des statistiques (remplace l'ancien onglet "Infos" du menu Options).
         void DrawInfoOverlay()
         {
-            var wrap = new GUIStyle(style) { wordWrap = true, fontSize = 13 };
-            float w = Mathf.Min(520f, Screen.width - 20f);
-            float h = wrap.CalcHeight(new GUIContent(InfoText()), w - 24f) + 20f;
-            var r = new Rect(Screen.width - w - 10f, 52f, w, h);
+            var wrap = infoStyle;
+            string info = InfoText();
+            float w = Mathf.Min(520f, UiW - 20f);
+            float h = wrap.CalcHeight(new GUIContent(info), w - 24f) + 20f;
+            var r = new Rect(UiW - w - 10f, 52f, w, h);
             infoRect = r;
             FillRect(r, new Color(0f, 0f, 0f, 0.65f));
-            GUI.Label(new Rect(r.x + 12f, r.y + 10f, r.width - 24f, r.height - 20f), InfoText(), wrap);
+            GUI.Label(new Rect(r.x + 12f, r.y + 10f, r.width - 24f, r.height - 20f), info, wrap);
         }
 
         void QuitGame()
@@ -1045,10 +1062,11 @@ namespace LivingPlanet
             if (lat < 0f) season = (season + 2) % 4;
             float sunA = Mathf.Atan2(view.SunDir.z, view.SunDir.x);
             float cellA = Mathf.Atan2(d.z, d.x);
-            float h = Mathf.Repeat(12f + Mathf.DeltaAngle(cellA * Mathf.Rad2Deg, sunA * Mathf.Rad2Deg) / 15f, 24f);
+            // Un lieu à l'est du soleil a déjà passé midi : l'heure avance avec la longitude.
+            float h = Mathf.Repeat(12f + Mathf.DeltaAngle(sunA * Mathf.Rad2Deg, cellA * Mathf.Rad2Deg) / 15f, 24f);
             int hh = (int)h, mm = (int)((h - hh) * 60f);
 
-            float w = 560f, x0 = Screen.width / 2f - w / 2f;
+            float w = 560f, x0 = UiW / 2f - w / 2f;
             float nameBarH = 30f, y0 = 6f + nameBarH + 4f;
             dialRect = new Rect(x0, 6f, w, y0 + 84f - 6f);
             DrawPlanetNameBar(x0, 6f, w, nameBarH);
@@ -1056,7 +1074,7 @@ namespace LivingPlanet
             GUI.color = new Color(0f, 0f, 0f, 0.6f);
             GUI.DrawTexture(new Rect(x0, y0, w, 84f), Texture2D.whiteTexture);
             GUI.color = old;
-            var center = new GUIStyle(style) { alignment = TextAnchor.MiddleCenter };
+            var center = centerStyle;
             string hemi = lat >= 0f ? "N" : "S";
             string head = "Année " + (year + 1) + "  ·  Jour " + day + "/" + dpy + "  ·  <b>" + SeasonNames[season] + "</b>  ·  " + hh.ToString("00") + ":" + mm.ToString("00");
             GUI.Label(new Rect(x0, y0 + 2f, w, 26f), head, center);
@@ -1067,7 +1085,7 @@ namespace LivingPlanet
             // boussole : cap de la caméra par rapport au nord local
             Vector3 north = Vector3.up - d * d.y;
             north = north.sqrMagnitude < 1e-6f ? Vector3.forward : north.normalized;
-            Vector3 east = Vector3.Cross(north, d).normalized;
+            Vector3 east = Vector3.Cross(d, north).normalized;
             Vector3 fwd = camRot * Vector3.forward;
             float heading = Mathf.Atan2(Vector3.Dot(fwd, east), Vector3.Dot(fwd, north)) * Mathf.Rad2Deg;
             float cy = y0 + 52f, half = w / 2f - 40f;
@@ -1095,7 +1113,7 @@ namespace LivingPlanet
                 GUI.color = new Color(0f, 0f, 0f, 0.55f);
                 GUI.DrawTexture(new Rect(x0, y, w, h), Texture2D.whiteTexture);
                 GUI.color = old;
-                var center = new GUIStyle(style) { alignment = TextAnchor.MiddleCenter, fontStyle = FontStyle.Bold };
+                var center = centerBoldStyle;
                 GUI.Label(new Rect(x0, y, w, h), DisplayPlanetName(), center);
                 if (GUI.Button(new Rect(x0 + w - h, y, h, h), "✎", iconBtn)) BeginRenamePlanet();
             }
@@ -1135,6 +1153,8 @@ namespace LivingPlanet
         void OnGUI()
         {
             InitStyles();
+            uiScale = Mathf.Max(1f, Screen.height / 1080f);
+            GUI.matrix = Matrix4x4.Scale(new Vector3(uiScale, uiScale, 1f));
             if (mainMenu) { if (selectingPlanet) DrawSavedPlanets(); else DrawMainMenu(); return; }
             if (!ready)
             {
@@ -1142,11 +1162,19 @@ namespace LivingPlanet
                 return;
             }
             if (showStats) { DrawStatsScreen(); return; }
+            if (!showHud && !pauseMenu)
+            {
+                // F10 : il ne reste que la mini-carte et ses boutons ; le reste n'est ni dessiné ni cliquable.
+                toolRect = toolbarRect = eventsRect = dialRect = infoRect = new Rect(0, 0, 0, 0);
+                DrawLayerButtons();
+                DrawMiniMap();
+                return;
+            }
             if (!pauseMenu) DrawTools();
             else toolRect = toolbarRect = new Rect(0, 0, 0, 0);
             DrawEvents();
             if (!string.IsNullOrEmpty(saveMessage))
-                GUI.Label(new Rect(15f, Screen.height - 185f, 500f, 45f), saveMessage, new GUIStyle(style) { wordWrap = true });
+                GUI.Label(new Rect(15f, UiH - 185f, 500f, 45f), saveMessage, wrapStyle);
             DrawDial();
             if (pauseMenu) DrawPauseMenu();
             if (!ready) return;
@@ -1166,9 +1194,9 @@ namespace LivingPlanet
                 string h = "<b>Contrôles</b>\nClic gauche glisser : déplacer la caméra sur la planète   Clic droit glisser : regarder   Molette : zoom   ZQSD/WASD : voler   Espace/E : monter   Ctrl/Q : descendre   Shift : x4\n" +
                     "[ ] ou - + : vitesse du temps   P : pause   Échap : menu   R : nouvelle planète\n" +
                     "F1-F9, F11 : vues (normal, température, humidité, altitude, plaques, magma, matériaux, gaz, nappes, pression)   C : mode humain (Alt = libérer la souris, Espace = saut)   X : voir à travers les nuages   V : plantes   B : volcan   F : incendie   M/N/J : astéroïde (impact / explosion / météore)   G : déluge   K : séisme   T : tsunami   L : éboulement   H : aide   I : infos   ù : diagnostic cellule   F10 : masquer l'interface";
-                GUI.Label(new Rect(15, Screen.height - 150, 1700, 90), h, style);
+                GUI.Label(new Rect(15, UiH - 150, 1700, 90), h, style);
             }
-            GUI.Label(new Rect(Screen.width / 2 - 6, Screen.height / 2 - 12, 20, 24), "+", style);
+            GUI.Label(new Rect(UiW / 2 - 6, UiH / 2 - 12, 20, 24), "+", style);
         }
     }
 }

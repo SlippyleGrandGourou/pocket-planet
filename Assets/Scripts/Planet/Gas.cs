@@ -65,6 +65,10 @@ namespace LivingPlanet
                     float g = rock[c] + sed[c];
                     bool ocean = g <= SeaLevel;
                     float warm = Mathf.Clamp01((temp[c] + 5f) / 30f);
+                    // Respiration animale : consommée partout, sinon elle s'accumulait sans fin au-dessus de la
+                    // mer (oiseaux en vol) et se libérait d'un coup si la cellule émergeait.
+                    float an = animalBreath[c];
+                    if (an > 0f) { a -= an * 0.01f; bb += an * 2f; animalBreath[c] = 0f; }
                     if (!ocean)
                     {
                         float veg = Mathf.Clamp01(cover[c]);
@@ -73,8 +77,6 @@ namespace LivingPlanet
                         bb += rot * 0.15f * warm; m += rot * (water[c] > 0.3f ? 0.01f : 0.001f) * warm;
                         float fr = fire[c];
                         if (fr > 0f) { a -= fr * 0.03f; bb += fr * 6f; m += fr * 0.02f; }
-                        float an = animalBreath[c];
-                        if (an > 0f) { a -= an * 0.01f; bb += an * 2f; animalBreath[c] = 0f; }
                         if (lava[c] > 0.1f) { bb += 5f; so += 0.6f; }
                         // dégazage de la croûte aux zones de forte contrainte (failles, rifts)
                         float st = stress[c];

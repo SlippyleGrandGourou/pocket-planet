@@ -24,6 +24,7 @@ Shader "LivingPlanet/Atmosphere"
             float4 _LP_Planet; // x: rayon planète, y: rayon atmosphère, z: intensité
             float4 _LP_SunDir;
             float _LP_Cloud;   // couverture nuageuse moyenne au-dessus de la caméra (voile blanc, ciel moins saturé)
+            float _LP_AtmoGain; // 1 au sol ; réduit quand la caméra sort de l'atmosphère (voir PlanetView)
 
             struct Attr { float4 pos : POSITION; };
             struct Vary { float4 cs : SV_POSITION; float3 ws : TEXCOORD0; };
@@ -107,6 +108,7 @@ Shader "LivingPlanet/Atmosphere"
                 float3 col = _LP_Planet.z * (sumR * br * (phR + 0.012) + sumM * bm * phM);
                 float lum = dot(col, float3(0.3, 0.59, 0.11));
                 col = lerp(col, lum.xxx * float3(1.0, 1.0, 1.02), cl * 0.45) * (1.0 - 0.25 * cl);
+                col *= _LP_AtmoGain;
                 col = 1.0 - exp(-col * 1.05);
                 col = pow(col, 0.96);
                 return half4(col, 0);

@@ -178,7 +178,7 @@ namespace LivingPlanet
             {
                 if (++pressAge[i] >= pressLife[i]) SpawnPress(i, false);
                 Vector3 d = pressDir[i];
-                Vector3 east = new Vector3(d.z, 0f, -d.x);
+                Vector3 east = new Vector3(-d.z, 0f, d.x);
                 east = east.sqrMagnitude < 1e-6f ? Vector3.right : east.normalized;
                 Vector3 north = Vector3.up - d * d.y;
                 north = north.sqrMagnitude < 1e-6f ? Vector3.forward : north.normalized;
@@ -234,7 +234,7 @@ namespace LivingPlanet
                     exposure *= 1f - Mathf.Clamp01(water[c] * 2f);
                     float erodible = Mathf.Clamp01(sand + dirt * 0.65f + clay * 0.25f + gravel * 0.1f);
 
-                    float random = Mathf.Repeat(Mathf.Sin((c + 1) * 31.7f + tick * 17.13f) * 15731.743f, 1f);
+                    float random = TickHashUnit(c, tick, 0xAE011A4u);
                     int maxDistance = Mathf.Clamp(1 + Mathf.FloorToInt(excess * 5f), 1, 5);
                     int distance = 1 + Mathf.FloorToInt(random * maxDistance);
                     int destination = c;

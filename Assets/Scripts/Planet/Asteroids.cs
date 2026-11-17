@@ -355,6 +355,22 @@ namespace LivingPlanet
             // d'impact qui façonnera vraiment le terrain au fil du temps (StepLavaFlows), pas juste un trou.
             float meltFactor = Mathf.Clamp01((a.size - 0.7f) / 2.3f);
             float meltFed = 0f;
+
+            // Part des éjectas reçue par une cellule du rebord. Pour un impact oblique, l'essentiel retombe du
+            // côté "aval" de la trajectoire (dans le sens du vol) plutôt que réparti également tout autour du
+            // cratère. Une seule formule pour le total (rimWeight) et pour le dépôt : le volume est conservé.
+            float RimShare(int cell, float x, float irregular)
+            {
+                float k = (1f - Mathf.Abs(x - 1.1f) / 0.4f) * irregular;
+                if (k <= 0f) return 0f;
+                if (obliquity > 0.01f)
+                {
+                    // G.Dir est sur la sphère unité : on passe en unités monde avant de comparer à rw.
+                    float downrange = Vector3.Dot(G.Dir[cell] - n, along) * R;
+                    k *= 1f + 0.9f * obliquity * Mathf.Clamp(downrange / (rw * 0.6f), -0.6f, 1f);
+                }
+                return k;
+            }
             for (int i = 0; i < M; i++)
             {
                 float dp = Vector3.Dot(G.Dir[i], n);
@@ -378,11 +394,7 @@ namespace LivingPlanet
                     if (meltFactor > 0f && x < 0.55f)
                         meltFed += FeedMagma(i, Mathf.Lerp(0.3f, 1.1f, meltFactor) * (1f - x / 0.55f));
                 }
-                else if (x < 1.5f)
-                {
-                    float k = (1f - Mathf.Abs(x - 1.1f) / 0.4f) * irregular;
-                    if (k > 0f) rimWeight += k;
-                }
+                else if (x < 1.5f) rimWeight += RimShare(i, x, irregular);
                 if (x < 1.5f)
                 {
                     if (susp[i] > 0f) { DepositWater(i, susp[i], 0.5f); susp[i] = 0f; }
@@ -415,22 +427,21 @@ namespace LivingPlanet
                     float x = EllipticalX(G.Dir[i], along, across, dp, R, rw, elong);
                     if (x < 0.85f || x >= 1.5f) continue;
                     float irregular = Mathf.Clamp(1f + 0.18f * Noise.Perlin(x * 2.2f + seed, Vector3.Dot(G.Dir[i], along) * 0.02f - seed, seed * 1.7f), 0.75f, 1.3f);
-                    float k = (1f - Mathf.Abs(x - 1.1f) / 0.4f) * irregular;
-                    // pour un impact oblique, l'essentiel des éjectas retombe du côté "aval" de la trajectoire
-                    // (dans le sens du vol) plutôt que réparti également tout autour du cratère
-                    if (obliquity > 0.01f)
-                    {
-                        float downrange = Vector3.Dot(G.Dir[i] - n, along);
-                        k *= 1f + 0.9f * obliquity * Mathf.Clamp(downrange / (rw * 0.6f), -0.6f, 1f);
-                    }
+                    float k = RimShare(i, x, irregular);
                     if (k > 0f) AddSoil(i, excavated * k / (rimWeight * G.Area[i]), 0.1f, 0.2f, 0.6f, 0.1f);
                 }
             }
             else rock[c] += excavated / G.Area[c];
             if (meltFed > 0.15f && lavaFlows.Count < 48)
             {
-                lavaFlows.Add(new LavaFlow { cell = c, steps = 0, vol = meltFed * MagmaSolidScale * 0.4f });
-                rockT[c] = Basalt;
+                // La coulée est prélevée sur le magma que l'impact vient de faire remonter, pas créée en plus.
+                float erupted = Mathf.Min(magma[c], meltFed * 0.4f);
+                if (erupted > 0f)
+                {
+                    magma[c] -= erupted;
+                    lavaFlows.Add(new LavaFlow { cell = c, steps = 0, vol = erupted * MagmaSolidScale });
+                    rockT[c] = Basalt;
+                }
             }
             DepositMeteorite(c, a);
             if (onBlastFauna != null) onBlastFauna(n, rw * 2.4f / R);

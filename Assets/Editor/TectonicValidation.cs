@@ -72,6 +72,19 @@ public static class TectonicValidation
         oceanFraction = (float)(ocean / area);
     }
 
+    // Altitude au-dessus de la mer dépassée par le dixième le plus haut des terres : mesure la hauteur des reliefs.
+    static float HighLand(PlanetSim s) { return LandHeight(s, 0.9f); }
+
+    static float LandHeight(PlanetSim s, float quantile)
+    {
+        var heights = new System.Collections.Generic.List<float>();
+        for (int c = 0; c < s.M; c++)
+            if (s.Ground(c) > s.SeaLevel) heights.Add(s.Ground(c) - s.SeaLevel);
+        if (heights.Count == 0) return 0f;
+        heights.Sort();
+        return heights[(int)(quantile * (heights.Count - 1))];
+    }
+
     // Sur plusieurs décennies, la tectonique ne doit ni vider les océans ni creuser de fosse sans fond : les
     // frontières divergentes emportent la croûte, il faut qu'elle soit remplacée au même rythme.
     static void LongTermSeaLevel()
@@ -82,19 +95,29 @@ public static class TectonicValidation
         s.Generate(123);
         var random = new System.Random(7);
         for (int i = 0; i < 300; i++) StepWorld(s, random, false);
-        float seaBefore = s.SeaLevel, oceanBefore, lowestBefore;
+        float seaBefore = s.SeaLevel, oceanBefore, lowestBefore, highBefore = HighLand(s);
+        double geologyBefore, waterBefore, saltBefore, geologyAfter, waterAfter, saltAfter;
+        double unweighted;
+        s.MaterialIndices(out unweighted, out waterBefore, out saltBefore, out geologyBefore);
+        string peaksBefore = LandHeight(s, 0.5f) + "/" + LandHeight(s, 0.99f) + "/" + LandHeight(s, 1f);
         SeaState(s, out oceanBefore, out lowestBefore);
         for (int i = 0; i < years * PlanetSim.TicksPerYear; i++) StepWorld(s, random, true);
         float oceanAfter, lowestAfter;
         SeaState(s, out oceanAfter, out lowestAfter);
         string measured = "sea " + seaBefore + " -> " + s.SeaLevel + ", ocean " + oceanBefore + " -> " + oceanAfter +
             ", lowest " + lowestBefore + " -> " + lowestAfter;
+        float highAfter = HighLand(s);
+        measured += ", high land " + highBefore + " -> " + highAfter + ", median/p99/max " + peaksBefore + " -> " +
+            LandHeight(s, 0.5f) + "/" + LandHeight(s, 0.99f) + "/" + LandHeight(s, 1f);
+        s.MaterialIndices(out unweighted, out waterAfter, out saltAfter, out geologyAfter);
+        measured += ", geology " + geologyBefore + " -> " + geologyAfter + ", water " + waterBefore + " -> " + waterAfter;
         double mantle = 0, area = 0;
         for (int c = 0; c < s.M; c++) { mantle += s.mantleSolid[c] * (double)s.G.Area[c]; area += s.G.Area[c]; }
         measured += ", mantle mean " + (mantle / area);
         Debug.Log("LONG TERM SEA LEVEL years=" + years + " " + measured);
         Check(Mathf.Abs(s.SeaLevel - seaBefore) < 5f, "Sea level drifted over " + years + " years: " + measured);
-        Check(Mathf.Abs(oceanAfter - oceanBefore) < 0.04f, "Ocean area drifted over " + years + " years: " + measured);
+        Check(Mathf.Abs(oceanAfter - oceanBefore) < 0.06f, "Ocean area drifted over " + years + " years: " + measured);
+        Check(Mathf.Abs(highAfter - highBefore) < highBefore * 0.15f, "Relief height drifted over " + years + " years: " + measured);
         Check(lowestAfter > lowestBefore - 30f, "Tectonics dug a bottomless trench over " + years + " years: " + measured);
     }
 

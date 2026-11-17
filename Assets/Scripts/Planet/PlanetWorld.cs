@@ -1164,8 +1164,10 @@ namespace LivingPlanet
             if (showStats) { DrawStatsScreen(); return; }
             if (!showHud && !pauseMenu)
             {
-                // F10 : plus aucun élément d'interface, ni dessiné ni cliquable (F10 de nouveau pour la retrouver).
-                toolRect = toolbarRect = eventsRect = dialRect = infoRect = layerRect = mapPanelRect = new Rect(0, 0, 0, 0);
+                // F10 : il ne reste que la mini-carte et ses boutons ; le reste n'est ni dessiné ni cliquable.
+                toolRect = toolbarRect = eventsRect = dialRect = infoRect = new Rect(0, 0, 0, 0);
+                DrawLayerButtons();
+                DrawMiniMap();
                 return;
             }
             if (!pauseMenu) DrawTools();

@@ -99,6 +99,12 @@ namespace LivingPlanet
         // dépôt (+) par l'eau (StepHydro) et par le vent (StepWindErosion), en épaisseur par tick. ErodeViewScale
         // amplifie des variations par tick minuscules pour qu'elles restent lisibles une fois lissées ;
         // ErodeViewRate fixe la vitesse de la moyenne (même esprit que precipRate pour precipAvg).
+        // Affaissement isostatique (voir StepGeology) : part de MaxHeight, au-dessus de la mer, à partir de
+        // laquelle un relief commence à s'affaisser, et part de son excès au-dessus de ce seuil qu'il perd par
+        // année simulée.
+        const float IsostasyStart = 0.15f;
+        const float IsostasyRate = 0.035f;
+
         public const float ErodeViewScale = 6f;
         public const float ErodeViewRate = 0.04f;
         public float[] waterErode;  // < 0 érosion nette récente, > 0 dépôt net récent (plage indicative, non bornée)
@@ -940,6 +946,15 @@ namespace LivingPlanet
                         float ex = rock[c] + sed[c] - (MaxHeight + 30f);
                         TransferMantleRock(c, -ex * 0.5f);
                     }
+                    // Affaissement isostatique : une croûte épaissie pèse sur le manteau et sa racine y retourne,
+                    // d'autant plus vite que le relief est haut. C'est ce qui borne la hauteur des chaînes : la
+                    // convergence apporte de la croûte en continu et l'érosion seule est loin de l'évacuer, donc
+                    // sans ce puits tout relief finit au plafond MaxHeight. Chaque chaîne se stabilise à la
+                    // hauteur où l'affaissement égale l'apport : haute là où la convergence est forte, modeste
+                    // ailleurs.
+                    float relief = (rock[c] + sed[c] - SeaLevel) / MaxHeight - IsostasyStart;
+                    if (relief > 0f)
+                        TransferMantleRock(c, -IsostasyRate / TicksPerYear * MaxHeight * relief);
                 }
             });
 

@@ -178,7 +178,7 @@ namespace LivingPlanet
             {
                 if (++pressAge[i] >= pressLife[i]) SpawnPress(i, false);
                 Vector3 d = pressDir[i];
-                Vector3 east = new Vector3(d.z, 0f, -d.x);
+                Vector3 east = new Vector3(-d.z, 0f, d.x);
                 east = east.sqrMagnitude < 1e-6f ? Vector3.right : east.normalized;
                 Vector3 north = Vector3.up - d * d.y;
                 north = north.sqrMagnitude < 1e-6f ? Vector3.forward : north.normalized;

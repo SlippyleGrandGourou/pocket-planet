@@ -1093,7 +1093,9 @@ namespace LivingPlanet
         {
             float decl = visDecl;
             float cd = Mathf.Cos(decl);
-            SunDir = new Vector3(cd * Mathf.Cos(dayAngle), Mathf.Sin(decl), cd * Mathf.Sin(dayAngle)).normalized;
+            // La planète tourne vers l'est (longitudes croissantes) : vu du sol, le soleil se lève à l'est et
+            // parcourt le ciel vers l'ouest, donc sa longitude décroît quand dayAngle augmente.
+            SunDir = new Vector3(cd * Mathf.Cos(dayAngle), Mathf.Sin(decl), -cd * Mathf.Sin(dayAngle)).normalized;
             sun.transform.rotation = Quaternion.LookRotation(-SunDir);
 
             float alt = camPos.magnitude - R;
@@ -1148,12 +1150,12 @@ namespace LivingPlanet
             sunDiscT.position = camPos + SunDir * (SkyDist - 500f);
             float lamS = 2f * Mathf.PI * vDays / DaysPerYear;
             // la voûte céleste tourne autour de l'axe des pôles (jour sidéral = jour solaire + dérive annuelle)
-            starsT.rotation = Quaternion.AngleAxis(-(dayAngle + lamS) * Mathf.Rad2Deg, Vector3.up);
+            starsT.rotation = Quaternion.AngleAxis((dayAngle + lamS) * Mathf.Rad2Deg, Vector3.up);
             float phi = 2f * Mathf.PI * vDays / MoonPeriodDays + Mathf.PI;
             // orbite lunaire inclinée de 5° dont la ligne des nœuds est alignée avec 2 des 4 pleines lunes de l'année
             float decM = S.AxialTilt * Mathf.Sin(lamS + phi) + 5f * Mathf.Deg2Rad * Mathf.Sin(lamS + phi);
             float cm = Mathf.Cos(decM), raM = dayAngle + phi;
-            MoonDir = new Vector3(cm * Mathf.Cos(raM), Mathf.Sin(decM), cm * Mathf.Sin(raM)).normalized;
+            MoonDir = new Vector3(cm * Mathf.Cos(raM), Mathf.Sin(decM), -cm * Mathf.Sin(raM)).normalized;
             moonT.position = camPos + MoonDir * (SkyDist - 700f);
             float sep = Vector3.Angle(MoonDir, -SunDir);
             EclipseAmount = Mathf.MoveTowards(EclipseAmount, 1f - Mathf.Clamp01(sep / 4f), 0.1f);

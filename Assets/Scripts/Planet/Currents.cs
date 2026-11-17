@@ -30,7 +30,8 @@ namespace LivingPlanet
                 {
                     if (Ground(c) >= SeaLevel || water[c] <= 0.00001f) { currentN[c] = Vector3.zero; continue; }
                     Vector3 d = G.Dir[c];
-                    float coriolis = Mathf.Clamp(2f * d.y * spinRate, -1f, 1f);
+                    // Signe lié au sens de rotation de la planète (vers l'est = longitudes croissantes).
+                    float coriolis = Mathf.Clamp(-2f * d.y * spinRate, -1f, 1f);
                     Vector3 driven = Quaternion.AngleAxis(45f * coriolis, d) * Vector3.ProjectOnPlane(wind[c], d) * 0.5f;
                     Vector3 gradient = DensityGradient(c);
                     Vector3 target = driven - gradient * 0.012f + Vector3.Cross(d, gradient) * (0.06f * coriolis);

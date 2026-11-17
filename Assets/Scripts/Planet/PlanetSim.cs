@@ -345,7 +345,8 @@ namespace LivingPlanet
                     Vector3 d = G.Dir[c];
                     float g0 = rock[c] + sed[c];
                     float lat = Mathf.Asin(Mathf.Clamp(d.y, -1f, 1f));
-                    Vector3 east = new Vector3(d.z, 0f, -d.x);
+                    // Est = sens de rotation de la planète = longitudes croissantes (voir PlanetView.SunDir).
+                    Vector3 east = new Vector3(-d.z, 0f, d.x);
                     if (east.sqrMagnitude < 1e-6f) east = Vector3.right;
                     east.Normalize();
                     Vector3 north = Vector3.up - d * d.y;
@@ -438,7 +439,7 @@ namespace LivingPlanet
                     Vector3 d = G.Dir[c];
                     float sl = d.y;
                     float cf = Mathf.Clamp01(Mathf.Abs(sl) * 3.5f * spinRate);
-                    Vector3 wg = Vector3.Cross(d, gr) * (sl >= 0f ? 1f : -1f);
+                    Vector3 wg = Vector3.Cross(gr, d) * (sl >= 0f ? 1f : -1f);
                     wind[c] += wg * cf - gr * (0.45f * (1f - cf) + 0.22f);
                     // en altitude, l'écoulement est quasi purement géostrophique (pas de friction de surface) :
                     // il suit les isobares sans être dévié vers les basses pressions.

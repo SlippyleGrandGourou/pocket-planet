@@ -336,7 +336,7 @@ namespace LivingPlanet
             float angle = 2f * Mathf.PI * day;
             float declination = Sim.Declination;
             float cosDeclination = Mathf.Cos(declination);
-            Fauna.sunDir = new Vector3(cosDeclination * Mathf.Cos(angle), Mathf.Sin(declination), cosDeclination * Mathf.Sin(angle));
+            Fauna.sunDir = new Vector3(cosDeclination * Mathf.Cos(angle), Mathf.Sin(declination), -cosDeclination * Mathf.Sin(angle));
             float days = DaysPerYear / PlanetSim.TicksPerYear / FaunaSubstepsPerTick;
             for (int i = 0; i < FaunaSubstepsPerTick; i++) Fauna.Step(days * FaunaSecondsPerDay, days);
             if (Sim.tick % 5 == 0) Sim.StepGas();
@@ -1062,7 +1062,8 @@ namespace LivingPlanet
             if (lat < 0f) season = (season + 2) % 4;
             float sunA = Mathf.Atan2(view.SunDir.z, view.SunDir.x);
             float cellA = Mathf.Atan2(d.z, d.x);
-            float h = Mathf.Repeat(12f + Mathf.DeltaAngle(cellA * Mathf.Rad2Deg, sunA * Mathf.Rad2Deg) / 15f, 24f);
+            // Un lieu à l'est du soleil a déjà passé midi : l'heure avance avec la longitude.
+            float h = Mathf.Repeat(12f + Mathf.DeltaAngle(sunA * Mathf.Rad2Deg, cellA * Mathf.Rad2Deg) / 15f, 24f);
             int hh = (int)h, mm = (int)((h - hh) * 60f);
 
             float w = 560f, x0 = UiW / 2f - w / 2f;

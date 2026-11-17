@@ -48,6 +48,56 @@ public static class TectonicValidation
         return result;
     }
 
+    static void StepWorld(PlanetSim s, System.Random random, bool geology)
+    {
+        s.StepClimate();
+        s.StepOcean();
+        s.StepHydro(); s.StepGroundwater();
+        s.StepIce(random);
+        if (geology) { s.StepGeology(); s.StepLithification(); s.StepTectonics(); }
+        s.StepCoastline();
+        s.tick++;
+    }
+
+    static void SeaState(PlanetSim s, out float oceanFraction, out float lowest)
+    {
+        double area = 0, ocean = 0;
+        lowest = float.MaxValue;
+        for (int c = 0; c < s.M; c++)
+        {
+            area += s.G.Area[c];
+            if (s.IsOcean(c)) ocean += s.G.Area[c];
+            lowest = Mathf.Min(lowest, s.Ground(c));
+        }
+        oceanFraction = (float)(ocean / area);
+    }
+
+    // Sur plusieurs décennies, la tectonique ne doit ni vider les océans ni creuser de fosse sans fond : les
+    // frontières divergentes emportent la croûte, il faut qu'elle soit remplacée au même rythme.
+    static void LongTermSeaLevel()
+    {
+        const int years = 40;
+        var s = new PlanetSim(new PlanetGrid(48, 1200f));
+        s.ApplyAge(4.5f);
+        s.Generate(123);
+        var random = new System.Random(7);
+        for (int i = 0; i < 300; i++) StepWorld(s, random, false);
+        float seaBefore = s.SeaLevel, oceanBefore, lowestBefore;
+        SeaState(s, out oceanBefore, out lowestBefore);
+        for (int i = 0; i < years * PlanetSim.TicksPerYear; i++) StepWorld(s, random, true);
+        float oceanAfter, lowestAfter;
+        SeaState(s, out oceanAfter, out lowestAfter);
+        string measured = "sea " + seaBefore + " -> " + s.SeaLevel + ", ocean " + oceanBefore + " -> " + oceanAfter +
+            ", lowest " + lowestBefore + " -> " + lowestAfter;
+        double mantle = 0, area = 0;
+        for (int c = 0; c < s.M; c++) { mantle += s.mantleSolid[c] * (double)s.G.Area[c]; area += s.G.Area[c]; }
+        measured += ", mantle mean " + (mantle / area);
+        Debug.Log("LONG TERM SEA LEVEL years=" + years + " " + measured);
+        Check(Mathf.Abs(s.SeaLevel - seaBefore) < 5f, "Sea level drifted over " + years + " years: " + measured);
+        Check(Mathf.Abs(oceanAfter - oceanBefore) < 0.04f, "Ocean area drifted over " + years + " years: " + measured);
+        Check(lowestAfter > lowestBefore - 30f, "Tectonics dug a bottomless trench over " + years + " years: " + measured);
+    }
+
     static double Sediment(PlanetSim s, int material = -1)
     {
         double result = 0;
@@ -892,6 +942,7 @@ public static class TectonicValidation
         PlateDrift();
         VisibleDriftOver170Years();
         CollisionSpurs();
+        LongTermSeaLevel();
         Debug.Log("TECTONIC VALIDATION PASSED");
     }
 }

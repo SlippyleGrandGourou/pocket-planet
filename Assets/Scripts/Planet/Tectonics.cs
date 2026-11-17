@@ -391,7 +391,7 @@ namespace LivingPlanet
                 }
             });
             // Approximation de l'épaisseur mobile, pas une couche de croûte explicitement simulée.
-            float baseHeight = SeaLevel - MaxHeight;
+            float baseHeight = CrustDatum - MaxHeight;
             int slopeYear = YearNumber;
             Par.For(M, (s, e) =>
             {
@@ -463,7 +463,10 @@ namespace LivingPlanet
                 }
             });
 
-            TransportCrust(baseHeight);
+            double mantleBefore = MantleVolume();
+            TransportCrust(baseHeight, true);
+            SubductOceanFloor(mantleBefore - MantleVolume());
+            CirculateMantle(dt);
 
             // Un second passage stabilise les fortes falaises sans déplacer la matière hors du bilan.
             Par.For(M, (s, e) =>
@@ -497,10 +500,83 @@ namespace LivingPlanet
                     }
                 }
             });
-            TransportCrust(baseHeight);
+            TransportCrust(baseHeight, false);
         }
 
-        void TransportCrust(float baseHeight)
+        // Altitude de référence des planchers tectoniques (base de la croûte mobile, fond des rifts). Fixe, et
+        // surtout pas le niveau de la mer courant : une fosse qui se creuse attire l'eau, fait baisser la mer,
+        // et un plancher accroché à la mer descendrait avec elle, sans limite.
+        public const float CrustDatum = 0f;
+        // Temps caractéristique de brassage du manteau solide entre cellules (années simulées).
+        const float MantleMixingYears = 1f;
+        // Profondeur maximale d'une fosse de subduction sous la référence, la même que pour les rifts.
+        const float MaxTrenchDepth = 110f;
+
+        double MantleVolume()
+        {
+            double total = 0d;
+            for (int c = 0; c < M; c++) total += mantleSolid[c] * (double)G.Area[c];
+            return total;
+        }
+
+        // Les plaques fonctionnent comme un tapis roulant : le volume de croûte créé aux dorsales pendant ce pas
+        // replonge dans le manteau là où le fond océanique converge (subduction). Sans cette fermeture du
+        // bilan, la croûte neuve épaissirait indéfiniment le fond des océans et ferait monter la mer.
+        // Le prélèvement est proportionnel à la convergence et s'annule en approchant de la profondeur maximale
+        // d'une fosse, qui ne peut donc pas se creuser sans fin.
+        void SubductOceanFloor(double createdVolume)
+        {
+            if (createdVolume <= 0d) return;
+            float trenchFloor = CrustDatum - MaxTrenchDepth;
+            double weightTotal = 0d;
+            for (int c = 0; c < M; c++) weightTotal += SubductionWeight(c, trenchFloor) * (double)G.Area[c];
+            if (weightTotal <= 0d) return;
+            float perWeight = (float)(createdVolume / weightTotal);
+            Par.For(M, (s, e) =>
+            {
+                for (int c = s; c < e; c++)
+                {
+                    float weight = SubductionWeight(c, trenchFloor);
+                    if (weight <= 0f) continue;
+                    float subducted = Mathf.Min(weight * perWeight, Ground(c) - trenchFloor);
+                    rock[c] -= subducted;
+                    mantleSolid[c] += subducted;
+                }
+            });
+        }
+
+        // Fond océanique (plus bas que la croûte océanique neuve) en zone de convergence.
+        float SubductionWeight(int c, float trenchFloor)
+        {
+            float ground = Ground(c);
+            if (conv[c] <= 0.05f || ground >= riftCrust) return 0f;
+            return conv[c] * Mathf.Clamp01((ground - trenchFloor) / 20f);
+        }
+
+        // Convection du manteau : le réservoir de chaque cellule revient vers la moyenne planétaire. Sans cela,
+        // les dorsales épuisent le manteau sous elles pendant qu'il s'accumule sous les chaînes de montagnes.
+        // La moyenne est pondérée par l'aire, donc le volume total est conservé.
+        void CirculateMantle(float dt)
+        {
+            double total = 0d, area = 0d;
+            for (int c = 0; c < M; c++)
+            {
+                total += mantleSolid[c] * (double)G.Area[c];
+                area += G.Area[c];
+            }
+            float mean = (float)(total / area);
+            float blend = 1f - Mathf.Exp(-dt / MantleMixingYears);
+            Par.For(M, (s, e) =>
+            {
+                for (int c = s; c < e; c++) mantleSolid[c] += (mean - mantleSolid[c]) * blend;
+            });
+        }
+
+        // `spreading` : passage d'advection des plaques. Aux frontières divergentes, les deux plaques emportent
+        // la croûte chacune de leur côté ; ce qui part est alors remplacé par de la roche montée du manteau
+        // (expansion des fonds océaniques), sans dépasser l'altitude de la croûte océanique neuve. Sans ce
+        // remplacement, chaque dorsale devenait une fosse sans fond qui vidait les océans.
+        void TransportCrust(float baseHeight, bool spreading)
         {
             var nbr = G.Nbr; var back = G.Back;
             Par.For(M, (s, e) =>
@@ -534,6 +610,13 @@ namespace LivingPlanet
                     }
                     rockN[c] = rock[c] - crust * outgoing + rockIn;
                     sedN[c] = sediment;
+                    if (spreading && rift[c] > 0.05f)
+                    {
+                        float lost = crust * outgoing - rockIn;
+                        float room = riftCrust - (rockN[c] + sediment);
+                        float created = Mathf.Min(Mathf.Min(lost, room), mantleSolid[c]);
+                        if (created > 0f) { rockN[c] += created; mantleSolid[c] -= created; }
+                    }
                     hardN[c] = rockWeight > 1e-8f ? hardness / rockWeight : hard[c];
                     if (sediment > 1e-8f)
                     {

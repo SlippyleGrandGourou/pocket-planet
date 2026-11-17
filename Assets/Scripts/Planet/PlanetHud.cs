@@ -50,7 +50,8 @@ namespace LivingPlanet
         readonly float[] resBuf = new float[4];
         int graphTab;
         Rect layerRect, mapRect, mapPanelRect;
-        float[] graphBins;
+        float[] graphBins, graphMin, graphMax;
+        Vector2[] graphPoints;
         int lastQuakes, lastSlides;
         Texture2D mapTexture;
         PlanetGrid mapGrid;
@@ -366,7 +367,7 @@ namespace LivingPlanet
         void DrawGraph(Rect r, Series[] ss, bool shared, bool longTerm = false)
         {
             FillRect(r, new Color(0f, 0f, 0f, 0.45f));
-            var pr = new Rect(r.x + 34f, r.y + 6f, r.width - 40f, r.height - 22f);
+            var pr = new Rect(r.x + 46f, r.y + 6f, r.width - 52f, r.height - 22f);
             int win = longTerm ? LongCap : GraphWin[graphPeriod];
             int avail = 0;
             for (int s = 0; s < ss.Length; s++) avail = Mathf.Max(avail, longTerm ? ss[s].ln : ss[s].n);
@@ -375,6 +376,9 @@ namespace LivingPlanet
             int bins = Mathf.Max(2, Mathf.Min(cnt, Mathf.FloorToInt(pr.width / 3f)));
             float colW = pr.width / bins;
             if (graphBins == null || graphBins.Length < bins) graphBins = new float[bins];
+            if (graphPoints == null || graphPoints.Length < bins) graphPoints = new Vector2[bins];
+            if (graphMin == null || graphMin.Length < ss.Length) { graphMin = new float[ss.Length]; graphMax = new float[ss.Length]; }
+            for (int s = 0; s < ss.Length; s++) graphMin[s] = graphMax[s] = float.NaN;
             var bv = graphBins;
             System.Array.Clear(bv, 0, bins);
 
@@ -398,38 +402,110 @@ namespace LivingPlanet
                     }
                     if (pass == 0) { if (shared) for (int b = 0; b < bins; b++) gmax = Mathf.Max(gmax, bv[b]); continue; }
 
-                    float lo = 0f, hi = gmax;
+                    float low = float.MaxValue, high = float.MinValue;
+                    for (int b = 0; b < bins; b++) { low = Mathf.Min(low, bv[b]); high = Mathf.Max(high, bv[b]); }
+                    graphMin[s] = low; graphMax[s] = high;
+                    float lo = 0f, hi = gmax * 1.08f;
                     if (!shared)
                     {
-                        lo = float.MaxValue; hi = float.MinValue;
-                        for (int b = 0; b < bins; b++) { lo = Mathf.Min(lo, bv[b]); hi = Mathf.Max(hi, bv[b]); }
-                        float pad = Mathf.Max((hi - lo) * 0.08f, 1e-4f);
-                        lo -= pad; hi += pad;
+                        float pad = Mathf.Max((high - low) * 0.08f, 1e-4f);
+                        lo = low - pad; hi = high + pad;
                     }
-                    else hi *= 1.08f;
-                    float prevY = 0f;
                     for (int b = 0; b < bins; b++)
                     {
                         float y = pr.yMax - Mathf.Clamp01((bv[b] - lo) / (hi - lo)) * (pr.height - 2f) - 2f;
-                        float x = pr.x + b * colW;
-                        // Courbe en escalier : un palier sur la largeur de la colonne, relié au précédent par un
-                        // trait vertical fin. Remplir toute la colonne entre les deux valeurs donnait de gros
-                        // pavés pleins dès que l'historique comptait peu de points (début de partie).
-                        FillRect(new Rect(x, y, Mathf.Max(2f, colW + 0.5f), 2f), sr.col);
-                        if (b > 0) FillRect(new Rect(x, Mathf.Min(y, prevY), 2f, Mathf.Abs(y - prevY) + 2f), sr.col);
-                        prevY = y;
+                        graphPoints[b] = new Vector2(pr.x + (b + 0.5f) * colW, y);
                     }
+                    DrawCurve(graphPoints, bins, sr.col, colW, pr);
                 }
             }
 
-            // axes : repères horizontaux, valeur max (échelle partagée) et durée couverte
-            for (int g = 0; g <= 2; g++) FillRect(new Rect(pr.x, pr.y + g * (pr.height - 2f) / 2f, pr.width, 1f), new Color(1f, 1f, 1f, 0.12f));
+            // Graduations : cinq niveaux horizontaux et cinq instants. Avec une échelle partagée (effectifs), les
+            // niveaux portent leur valeur ; sinon chaque courbe a sa propre échelle, donnée dans la légende.
             var small = smallStyle;
-            if (shared) GUI.Label(new Rect(r.x + 2f, pr.y - 4f, 34f, 16f), gmax >= 100f ? gmax.ToString("0") : gmax.ToString("0.#"), small);
             float spanDays = longTerm ? cnt * (LongEvery / (float)SamplesPerDay) : cnt / (float)SamplesPerDay;
-            string span = spanDays >= 1f ? "−" + spanDays.ToString("0.#") + " j" : "−" + (spanDays * 24f).ToString("0") + " h";
-            GUI.Label(new Rect(pr.x, r.yMax - 18f, 100f, 16f), span, small);
-            GUI.Label(new Rect(pr.xMax - 70f, r.yMax - 18f, 70f, 16f), "maintenant", small);
+            const int divisions = 4;
+            for (int g = 0; g <= divisions; g++)
+            {
+                float t = g / (float)divisions;
+                float yy = pr.y + t * (pr.height - 2f);
+                FillRect(new Rect(pr.x, yy, pr.width, 1f), new Color(1f, 1f, 1f, 0.12f));
+                if (shared) GUI.Label(new Rect(r.x + 2f, yy - 8f, 44f, 16f), GraphNumber(gmax * 1.08f * (1f - t)), small);
+                float xx = pr.x + t * pr.width;
+                if (g > 0 && g < divisions) FillRect(new Rect(xx, pr.y, 1f, pr.height), new Color(1f, 1f, 1f, 0.07f));
+                string when = g == divisions ? "maintenant" : GraphSpan(spanDays * (1f - t));
+                float labelX = g == 0 ? xx : (g == divisions ? xx - 64f : xx - 20f);
+                GUI.Label(new Rect(labelX, r.yMax - 18f, 80f, 16f), when, small);
+            }
+        }
+
+        static string GraphNumber(float v)
+        {
+            float a = Mathf.Abs(v);
+            return v.ToString(a >= 100f ? "0" : (a >= 10f ? "0.#" : "0.##"));
+        }
+
+        static string GraphSpan(float days)
+        {
+            return days >= 1f ? "−" + days.ToString("0.#") + " j" : "−" + (days * 24f).ToString("0") + " h";
+        }
+
+        static Material lineMaterial;
+
+        // Trace une courbe continue passant par les points (interpolation de Catmull-Rom quand ils sont espacés),
+        // en un seul appel de dessin. Sans le shader de tracé, on retombe sur de petits segments rectangulaires.
+        static void DrawCurve(Vector2[] points, int count, Color color, float spacing, Rect clip)
+        {
+            if (Event.current.type != EventType.Repaint || count < 2) return;
+            if (lineMaterial == null)
+            {
+                var shader = Shader.Find("Hidden/Internal-Colored");
+                if (shader != null)
+                {
+                    lineMaterial = new Material(shader) { hideFlags = HideFlags.HideAndDontSave };
+                    lineMaterial.SetInt("_SrcBlend", (int)UnityEngine.Rendering.BlendMode.SrcAlpha);
+                    lineMaterial.SetInt("_DstBlend", (int)UnityEngine.Rendering.BlendMode.OneMinusSrcAlpha);
+                    lineMaterial.SetInt("_Cull", (int)UnityEngine.Rendering.CullMode.Off);
+                    lineMaterial.SetInt("_ZWrite", 0);
+                    lineMaterial.SetInt("_ZTest", (int)UnityEngine.Rendering.CompareFunction.Always);
+                }
+            }
+            if (lineMaterial == null)
+            {
+                for (int i = 0; i < count; i++) FillRect(new Rect(points[i].x - 1f, points[i].y - 1f, Mathf.Max(2f, spacing), 2f), color);
+                return;
+            }
+            int steps = Mathf.Clamp(Mathf.RoundToInt(spacing / 4f), 1, 16);
+            const float half = 1.1f;
+            lineMaterial.SetPass(0);
+            // L'interface a déjà placé sa matrice (mise à l'échelle comprise) : on dessine dans son repère.
+            GL.PushMatrix();
+            GL.Begin(GL.QUADS);
+            GL.Color(color);
+            Vector2 previous = points[0];
+            for (int i = 0; i < count - 1; i++)
+            {
+                Vector2 p0 = points[Mathf.Max(i - 1, 0)], p1 = points[i], p2 = points[i + 1], p3 = points[Mathf.Min(i + 2, count - 1)];
+                for (int k = 1; k <= steps; k++)
+                {
+                    float t = k / (float)steps, t2 = t * t, t3 = t2 * t;
+                    Vector2 next = 0.5f * (2f * p1 + (p2 - p0) * t + (2f * p0 - 5f * p1 + 4f * p2 - p3) * t2 +
+                        (3f * p1 - p0 - 3f * p2 + p3) * t3);
+                    next.y = Mathf.Clamp(next.y, clip.y, clip.yMax);
+                    Vector2 along = next - previous;
+                    if (along.sqrMagnitude > 1e-6f)
+                    {
+                        Vector2 side = new Vector2(-along.y, along.x).normalized * half;
+                        GL.Vertex3(previous.x - side.x, previous.y - side.y, 0f);
+                        GL.Vertex3(previous.x + side.x, previous.y + side.y, 0f);
+                        GL.Vertex3(next.x + side.x, next.y + side.y, 0f);
+                        GL.Vertex3(next.x - side.x, next.y - side.y, 0f);
+                    }
+                    previous = next;
+                }
+            }
+            GL.End();
+            GL.PopMatrix();
         }
 
         void DrawLegend(Rect r, Series[] ss)
@@ -440,7 +516,11 @@ namespace LivingPlanet
                 float x = r.x + (i % 2) * colW, y = r.y + (i / 2) * 22f;
                 FillRect(new Rect(x, y + 6f, 10f, 10f), ss[i].col);
                 string v = ss[i].Last.ToString(ss[i].Last >= 100f ? "0" : "0.##");
-                GUI.Label(new Rect(x + 14f, y, colW - 14f, 22f), ss[i].name + " : " + v + (string.IsNullOrEmpty(ss[i].unit) ? "" : " " + ss[i].unit), style);
+                string unit = string.IsNullOrEmpty(ss[i].unit) ? "" : " " + ss[i].unit;
+                // étendue de la courbe sur la période affichée : c'est l'échelle verticale propre à cette série
+                string range = graphMin != null && i < graphMin.Length && !float.IsNaN(graphMin[i])
+                    ? "   <color=#9aa4b4>(de " + GraphNumber(graphMin[i]) + " à " + GraphNumber(graphMax[i]) + unit + ")</color>" : "";
+                GUI.Label(new Rect(x + 14f, y, colW - 14f, 22f), ss[i].name + " : " + v + unit + range, style);
             }
         }
 

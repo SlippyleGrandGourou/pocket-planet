@@ -231,7 +231,9 @@ namespace LivingPlanet
             float insol = Mathf.Max(0f, Mathf.Cos(latA[c] - decl));
             float t = -32f + 66f * Mathf.Pow(insol, 0.8f);
             if (g < SeaLevel) t = t * 0.8f + 4f;
-            else t -= Lapse * g;
+            // Le refroidissement suit l'altitude au-dessus de la mer, pas l'altitude absolue : sinon toute
+            // variation du niveau de la mer réchauffe ou refroidit artificiellement l'ensemble des terres.
+            else t -= Lapse * (g - SeaLevel);
             t -= 7f * Mathf.Min(1f, ash[c]);
             if (co2 != null)
             {
@@ -919,7 +921,7 @@ namespace LivingPlanet
                             // entre 15 et 110 sous le niveau de la mer) : l'affaissement ralentit puis s'arrête
                             // en l'approchant, au lieu de creuser indéfiniment jusqu'au plancher mantellique —
                             // les failles n'ont donc plus toutes la même profondeur uniforme.
-                            float depthTarget = SeaLevel - Mathf.Lerp(15f, 110f, CellHashUnit(c, 0x9E3779B9u));
+                            float depthTarget = CrustDatum - Mathf.Lerp(15f, 110f, CellHashUnit(c, 0x9E3779B9u));
                             float sinking = riftSink * rf * rf * Mathf.Clamp01((g2 - depthTarget) / 20f);
                             TransferMantleRock(c, -sinking);
                         }

@@ -99,6 +99,8 @@ namespace LivingPlanet
 
         // atmosphère / nuages / rivières / faune / tsunami
         readonly float AtmoThickness;
+        // Part de l'intensité du ciel conservée quand la planète est vue de l'espace.
+        const float OrbitAtmoGain = 0.12f;
         bool atmoShader;
         GameObject atmoIn, atmoOut, atmoFallback;
         float atmoShellRadius;
@@ -1138,6 +1140,11 @@ namespace LivingPlanet
                 cloudHere = Mathf.Clamp01((cloudHere / 5f - 0.2f) / 0.8f) * Atmo;
                 skyCloud = Mathf.Lerp(skyCloud, cloudHere, 0.02f);
                 Shader.SetGlobalFloat("_LP_Cloud", skyCloud);
+                // L'intensité du ciel est réglée pour être vue du sol. Vue du dessus, la même lumière diffusée
+                // s'ajoute à l'image du terrain et le noyait sous un voile blanc-bleu : on la réduit
+                // progressivement à mesure que la caméra monte et sort de l'atmosphère.
+                float leaving = Mathf.SmoothStep(0f, 1f, Mathf.InverseLerp(0.25f * AtmoThickness, 1.5f * AtmoThickness, alt));
+                Shader.SetGlobalFloat("_LP_AtmoGain", Mathf.Lerp(1f, OrbitAtmoGain, leaving));
                 // "Dedans" se juge par rapport à la coque réellement dessinée, pas au sommet de l'atmosphère :
                 // entre les deux, la caméra est dans la coque et sa face externe, seule affichée, est invisible.
                 bool inside = camPos.magnitude < atmoShellRadius;

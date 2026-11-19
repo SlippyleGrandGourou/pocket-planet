@@ -472,10 +472,7 @@ namespace LivingPlanet
                 }
             });
 
-            double mantleBefore = MantleVolume();
             TransportCrust(baseHeight, true);
-            SubductOceanFloor(mantleBefore - MantleVolume());
-            CirculateMantle(dt);
 
             // Un second passage stabilise les fortes falaises sans déplacer la matière hors du bilan.
             Par.For(M, (s, e) =>
@@ -518,6 +515,8 @@ namespace LivingPlanet
         public const float CrustDatum = 0f;
         // Temps caractéristique de brassage du manteau solide entre cellules (années simulées).
         const float MantleMixingYears = 1f;
+        // Temps de retour du volume du manteau vers sa valeur d'origine (années simulées).
+        const float MantleBalanceYears = 2f;
         // Profondeur maximale d'une fosse de subduction sous la référence, la même que pour les rifts.
         const float MaxTrenchDepth = 110f;
 
@@ -528,13 +527,57 @@ namespace LivingPlanet
             return total;
         }
 
-        // Les plaques fonctionnent comme un tapis roulant : le volume de croûte créé aux dorsales pendant ce pas
-        // replonge dans le manteau là où le fond océanique converge (subduction). Sans cette fermeture du
-        // bilan, la croûte neuve épaissirait indéfiniment le fond des océans et ferait monter la mer.
+        // Ferme le cycle de la roche par le manteau, dont le volume doit rester celui de la génération.
+        // - Manteau en déficit (les dorsales et les volcans ont fabriqué de la croûte) : le fond océanique
+        //   replonge là où il converge (subduction).
+        // - Manteau en excès (des racines de montagnes s'y sont affaissées) : il ressort en croûte océanique
+        //   neuve, surtout le long des dorsales.
+        // La croûte totale reste ainsi constante : ce que les continents gagnent en hauteur, les océans ne le
+        // perdent plus en profondeur, et le niveau de la mer cesse de dériver.
+        void BalanceMantle(float dt)
+        {
+            // Le magma est du manteau fondu (voir InitMagma et StepMagma) : il compte dans le même réservoir.
+            double surplus = 0d;
+            for (int c = 0; c < M; c++)
+                surplus += (mantleSolid[c] + magma[c] * MagmaSolidScale - InitialMantleSolid) * (double)G.Area[c];
+            double share = 1d - Math.Exp(-dt / MantleBalanceYears);
+            if (surplus < 0d) SubductOceanFloor(-surplus * share);
+            else ExtrudeOceanFloor(surplus * share);
+        }
+
+        void ExtrudeOceanFloor(double volume)
+        {
+            if (volume <= 0d) return;
+            double weightTotal = 0d;
+            for (int c = 0; c < M; c++) weightTotal += ExtrusionWeight(c) * (double)G.Area[c];
+            if (weightTotal <= 0d) return;
+            float perWeight = (float)(volume / weightTotal);
+            Par.For(M, (s, e) =>
+            {
+                for (int c = s; c < e; c++)
+                {
+                    float weight = ExtrusionWeight(c);
+                    if (weight <= 0f) continue;
+                    float extruded = Mathf.Min(Mathf.Min(weight * perWeight, riftCrust - Ground(c)), mantleSolid[c]);
+                    if (extruded <= 0f) continue;
+                    rock[c] += extruded;
+                    mantleSolid[c] -= extruded;
+                }
+            });
+        }
+
+        // Fond océanique sous le niveau de la croûte neuve : l'essentiel sort aux dorsales, un peu partout ailleurs.
+        float ExtrusionWeight(int c)
+        {
+            float depth = riftCrust - Ground(c);
+            return depth <= 0f ? 0f : (rift[c] + 0.02f) * Mathf.Clamp01(depth / 20f);
+        }
+
         // Le prélèvement est proportionnel à la convergence et s'annule en approchant de la profondeur maximale
         // d'une fosse, qui ne peut donc pas se creuser sans fin.
-        void SubductOceanFloor(double createdVolume)
+        void SubductOceanFloor(double volume)
         {
+            double createdVolume = volume;
             if (createdVolume <= 0d) return;
             float trenchFloor = CrustDatum - MaxTrenchDepth;
             double weightTotal = 0d;
@@ -683,6 +726,8 @@ namespace LivingPlanet
             }
 
             AdvectCrust(dt);
+            BalanceMantle(dt);
+            CirculateMantle(dt);
             if (any)
             {
                 // Au-delà des étiquettes (type de roche, minerai), toute la colonne géologique doit voyager

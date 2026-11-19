@@ -77,9 +77,11 @@ public static class FlowValidation
         for (int c = 0; c < geology.M; c++) geology.rock[c] = 1f;
         geology.rock[source] = 100f;
         geology.sed[source] = 1f;
-        sediment = Weighted(geology, geology.rock, geology.sed);
+        // Un relief aussi haut s'affaisse aussi dans le manteau (isostasie) : c'est la somme qui se conserve.
+        sediment = Weighted(geology, geology.rock, geology.sed, geology.mantleSolid, geology.mantleResidual);
         geology.StepGeology();
-        Near(sediment, Weighted(geology, geology.rock, geology.sed), "Area-weighted slope transport");
+        Near(sediment, Weighted(geology, geology.rock, geology.sed, geology.mantleSolid, geology.mantleResidual),
+            "Area-weighted slope transport");
 
         var wind = new PlanetSim(g);
         for (int c = 0; c < wind.M; c++) wind.rock[c] = 1f;

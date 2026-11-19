@@ -92,6 +92,11 @@ namespace LivingPlanet
         public float erosionScale = 1f;
         // Érosion côtière par les courants (houle/marée) : attaque le littoral et le fond peu profond, remet de la
         // matière en suspension pour qu'elle soit transportée/redéposée ailleurs par les courants (voir StepHydro).
+        // Part du débit d'une arête conservée d'un pas au suivant (élan de l'eau) : faible pour une lame mince,
+        // proche de un pour une section mouillée d'au moins DeepFlowDepth.
+        const float ShallowMomentum = 0.65f;
+        const float DeepMomentum = 0.98f;
+        const float DeepFlowDepth = 2f;
         public float CoastalErode = 0.11f;
         public float CoastalErodeDepth = 8f;
 
@@ -602,8 +607,15 @@ namespace LivingPlanet
                             // L'onde possède sa propre inertie : additionner les deux débits inertiels
                             // sur une même arête amplifie les oscillations en avance rapide.
                             bool waveEdge = tsunamiRunning && (tsunamiActive[c] != 0 || tsunamiActive[n] != 0);
-                            o = dz > 0f || oceanPair
-                                ? Mathf.Max(0f, (waveEdge ? 0f : 0.65f) * outW[b + k] + 0.35f * o) : 0f;
+                            // Le frottement du fond freine d'autant moins le courant que la section mouillée est
+                            // profonde : une lame mince s'arrête dès que la pente s'annule, un chenal profond garde son
+                            // élan et débite donc bien plus pour le même écart de niveau. Sans cela, un fleuve ou un
+                            // détroit profond n'évacuait pas plus qu'un filet d'eau, et l'eau s'entassait en amont
+                            // jusqu'à noyer les terres.
+                            float section = S - Mathf.Max(rock[c] + sed[c], rock[n] + sed[n]);
+                            float momentum = Mathf.Lerp(ShallowMomentum, DeepMomentum, Mathf.Clamp01(section / DeepFlowDepth));
+                            o = dz > 0f || oceanPair || section > 0f
+                                ? Mathf.Max(0f, (waveEdge ? 0f : momentum) * outW[b + k] + 0.35f * o) : 0f;
                         }
                         outW[b + k] = o;
                         total += o;

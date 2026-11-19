@@ -742,6 +742,64 @@ public static class FlowValidation
         finally { UnityEngine.Object.DestroyImmediate(go); }
     }
 
+    // Un chenal profond doit évacuer son débit sans que l'eau s'entasse en amont : c'est ce qui noyait les terres
+    // derrière chaque fleuve et chaque détroit. Chenal d'une cellule de large entre deux murs, alimenté à un bout
+    // et maintenu à 10 de profondeur à l'autre ; on mesure la dénivelée de la surface entre les deux bouts.
+    static void DeepChannelCarriesItsFlow()
+    {
+        const float depth = 10f, inflow = 0.2f;
+        var s = new PlanetSim(new PlanetGrid(12, 56.25f));
+        s.SeaLevel = -100f;
+        s.erosionScale = 0f;
+        for (int c = 0; c < s.M; c++) s.rock[c] = 60f;
+        int source = s.G.CellIndex(0, 1, 6), outlet = s.G.CellIndex(0, 10, 6);
+        for (int i = 1; i <= 10; i++)
+        {
+            int c = s.G.CellIndex(0, i, 6);
+            s.rock[c] = 0f; s.water[c] = depth;
+        }
+        // Moyenne sur la fin de l'essai : l'eau profonde garde un léger clapot autour de son régime permanent.
+        double sum = 0; float lowest = float.MaxValue, highest = float.MinValue;
+        const int ticks = 1200, window = 400;
+        for (int tick = 0; tick < ticks; tick++)
+        {
+            s.water[source] += inflow;
+            s.water[outlet] = depth;
+            float now = s.water[source] - s.water[outlet];
+            s.StepHydro();
+            if (tick < ticks - window) continue;
+            sum += now; lowest = Mathf.Min(lowest, now); highest = Mathf.Max(highest, now);
+        }
+        float head = (float)(sum / window);
+        Debug.Log("Head along a deep channel carrying " + inflow + " per tick: " + head + " (from " + lowest + " to " + highest + ")");
+        Check(head > 0f && highest < 1.5f, "Water piles up behind a deep channel: head " + head + ", up to " + highest);
+    }
+
+    // Une étendue profonde dérangée doit revenir au repos, sans clapot entretenu : eau surélevée de 0,2 sur une
+    // face entière d'une planète sans relief, puis écart de niveau restant après un long temps.
+    static void DeepWaterComesToRest()
+    {
+        var s = new PlanetSim(new PlanetGrid(12, 56.25f));
+        s.SeaLevel = -100f;
+        s.erosionScale = 0f;
+        int face = s.G.N * s.G.N;
+        for (int c = 0; c < s.M; c++) s.water[c] = 10f + (c < face ? 0.2f : 0f);
+        double volume = Weighted(s, s.water);
+        for (int tick = 0; tick < 1500; tick++) s.StepHydro();
+        // 1500 pas en simple précision : on tolère la dérive d'arrondi, pas une fuite.
+        Check(Math.Abs(Weighted(s, s.water) - volume) < volume * 1e-4, "Levelling water volume changed: " + volume + " -> " + Weighted(s, s.water));
+        float low = float.MaxValue, high = float.MinValue;
+        for (int c = 0; c < s.M; c++) { low = Mathf.Min(low, s.water[c]); high = Mathf.Max(high, s.water[c]); }
+        Check(high - low < 0.01f, "Deep water keeps sloshing instead of coming to rest: " + (high - low));
+    }
+
+    public static void RunDrainage()
+    {
+        DeepChannelCarriesItsFlow();
+        DeepWaterComesToRest();
+        Debug.Log("DRAINAGE VALIDATION PASSED");
+    }
+
     public static void RunTsunami()
     {
         TsunamiRunup();
@@ -771,6 +829,8 @@ public static class FlowValidation
         WindVortices();
         Currents();
         CloudAdvection();
+        DeepChannelCarriesItsFlow();
+        DeepWaterComesToRest();
         Debug.Log("FLOW VALIDATION PASSED");
     }
 }

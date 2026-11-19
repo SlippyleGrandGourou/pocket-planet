@@ -17,12 +17,16 @@ namespace LivingPlanet
             // version subdivisée purement visuelle quand MeshDetail > 1 (voir RefreshDetailMesh).
             public Mesh renderMesh;
             public Vector3[] fineVerts, fineNorms;
-            public Mesh waterMesh;
-            public MeshRenderer waterR;
+            public Mesh waterMesh, riverMesh;
+            public MeshRenderer waterR, riverR;
             public Vector3[] waterVerts;
-            public Vector3[] waterFlows;
+            public Vector3[] waterFlows, waterSlopes;
             public Color32[] waterColors;
             public Vector4[] waterData;
+            // Niveau de l'eau par sommet (NaN hors de l'eau), sommets touchant une cellule en eau, et niveau
+            // prolongé sous les cellules de berge (NaN ailleurs) : voir RefreshWaterFace.
+            public float[] waterLevel, shoreLevel;
+            public bool[] waterWet;
             public readonly List<int> waterTriangles = new List<int>();
             public bool dirty = true;
         }
@@ -105,10 +109,6 @@ namespace LivingPlanet
         GameObject atmoIn, atmoOut, atmoFallback;
         float atmoShellRadius;
         float cloudTimer;
-        struct Drop { public Vector3 dir; public float life; }
-        Drop[] drops = new Drop[1200];
-        int dropN;
-        Bucket riverB;
         Bucket icebergB;
         Bucket[] faunaB;
         System.Random vr = new System.Random(5);
@@ -133,7 +133,11 @@ namespace LivingPlanet
         {
             HideWater = hidden;
             for (int f = 0; f < 6; f++)
-                if (faces[f] != null && faces[f].waterR != null) faces[f].waterR.enabled = !hidden;
+            {
+                if (faces[f] == null || faces[f].waterR == null) continue;
+                faces[f].waterR.enabled = !hidden;
+                faces[f].riverR.enabled = !hidden;
+            }
         }
 
         public float SaveDayAngle() { return dayAngle; }
@@ -357,27 +361,7 @@ namespace LivingPlanet
             }
             waterMaterial = om;
 
-            for (int f = 0; f < 6; f++)
-            {
-                var F = faces[f];
-                F.waterMesh = BuildGridMesh(N, R, f);
-                F.waterMesh.MarkDynamic();
-                F.waterVerts = new Vector3[G.VertsPerFace];
-                F.waterFlows = new Vector3[G.VertsPerFace];
-                F.waterColors = new Color32[G.VertsPerFace];
-                F.waterData = new Vector4[G.VertsPerFace];
-                for (int i = 0; i < F.waterVerts.Length; i++) F.waterVerts[i] = G.VertDir[f * G.VertsPerFace + i];
-                F.waterMesh.normals = F.waterVerts;
-                var waterObject = new GameObject("Water" + f);
-                waterObject.transform.SetParent(root.transform, false);
-                waterObject.AddComponent<MeshFilter>().sharedMesh = F.waterMesh;
-                var waterRenderer = waterObject.AddComponent<MeshRenderer>();
-                waterRenderer.sharedMaterial = om;
-                waterRenderer.shadowCastingMode = ShadowCastingMode.Off;
-                waterRenderer.receiveShadows = false;
-                waterRenderer.enabled = !HideWater;
-                F.waterR = waterRenderer;
-            }
+            for (int f = 0; f < 6; f++) BuildWaterFace(f, om);
 
             BuildAtmosphere();
             BuildClouds();
@@ -508,8 +492,6 @@ namespace LivingPlanet
             faunaB[Fauna.Bird] = K(bb, L(0.9f, 0.25f, 0.2f));
             faunaB[Fauna.Fish] = K(fb, L(1f, 0.6f, 0.15f));
             faunaB[Fauna.Shark] = K(sb, L(0.4f, 0.47f, 0.55f));
-            riverB = new Bucket { mesh = ((Func<Mesh>)(() => { var m = B(); m.Sphere(Vector3.zero, 0.7f, 0.7f, 4, 8); return m.Build(); }))(), mat = MakeUnlit(new Color(0.75f, 0.9f, 1f)) };
-            riverB.mat.enableInstancing = true;
             // Icebergs à la dérive : un bloc anguleux simple (quelques boîtes qui dépassent), dont la majeure
             // partie "immergée" reste sous la ligne de flottaison comme un vrai iceberg.
             var icb = B(); icb.Box(new Vector3(0, -0.6f, 0), new Vector3(2.2f, 1.6f, 2.4f)); icb.Box(new Vector3(0.4f, 0.35f, -0.2f), new Vector3(1.1f, 0.9f, 1.3f)); icb.Box(new Vector3(-0.5f, 0.15f, 0.4f), new Vector3(0.7f, 0.5f, 0.8f));
@@ -686,6 +668,7 @@ namespace LivingPlanet
             F.tex.Apply(false);
             if (MeshDetail > 1) RefreshDetailMesh(f);
             if (refreshWater) RefreshWaterFace(f);
+            RefreshRiverFace(f);
             F.dirty = false;
         }
 
@@ -729,75 +712,6 @@ namespace LivingPlanet
             float h = Vector3.Dot(p, new Vector3(127.1f, 311.7f, 74.7f));
             float s = Mathf.Sin(h) * 43758.5453f;
             return s - Mathf.Floor(s);
-        }
-
-        void RefreshWaterFace(int f)
-        {
-            var F = faces[f];
-            int vpf = G.VertsPerFace, n = G.N;
-            Par.For(vpf, (start, end) =>
-            {
-                for (int vi = start; vi < end; vi++)
-                {
-                    int gi = f * vpf + vi;
-                    float heightSum = 0f, waterDepth = 0f, wave = 0f, ice = 0f, speed = 0f, sediment = 0f, turbulence = 0f, surgeHeight = 0f;
-                    Vector3 flow = Vector3.zero;
-                    int count = 0;
-                    for (int k = 0; k < 4; k++)
-                    {
-                        int c = G.VertCells[gi * 4 + k];
-                        if (c < 0) continue;
-                        float ground = S.Ground(c);
-                        bool ocean = S.IsOcean(c);
-                        if (S.water[c] <= (ocean ? 0.02f : 0.08f)) continue;
-                        // Moyenne des surfaces mouillées pour éviter les pics aux jonctions terre/mer.
-                        float surfaceElev = ground + S.water[c];
-                        heightSum += surfaceElev;
-                        waterDepth += S.water[c];
-                        Vector3 cellFlow = Vector3.zero;
-                        if (ocean && S.current != null) cellFlow += S.current[c];
-                        else for (int edge = 0; edge < 4; edge++) cellFlow += S.outW[c * 4 + edge] * G.Tan[c * 4 + edge];
-                        Vector3 surge = S.TsunamiFlow(c);
-                        cellFlow += surge;
-                        surgeHeight += S.TsunamiElevation(c);
-                        turbulence += Mathf.Clamp01(surge.magnitude * 0.12f) * Mathf.Clamp01(1f - S.water[c] / 12f);
-                        speed += Mathf.Clamp01(cellFlow.magnitude);
-                        sediment += Mathf.Clamp01(S.susp[c] / Mathf.Max(S.water[c], 0.01f));
-                        cellFlow = Vector3.ProjectOnPlane(cellFlow, G.Dir[c]);
-                        flow += cellFlow;
-                        wave += Mathf.Clamp01(0.06f + S.wind[c].magnitude * (1f + 0.9f * S.storm[c]) * 0.36f +
-                            S.storm[c] * 0.35f + cellFlow.magnitude * 0.35f);
-                        ice += Mathf.Clamp01((-6f - S.temp[c]) / 6f);
-                        count++;
-                    }
-                    float height = count > 0 ? heightSum / count : 0f;
-                    if (count > 0) { waterDepth /= count; wave /= count; ice /= count; flow /= count; speed /= count; sediment /= count; turbulence /= count; surgeHeight /= count; }
-                    Vector3 direction = G.VertDir[gi];
-                    flow = Vector3.ProjectOnPlane(flow, direction);
-                    F.waterFlows[vi] = flow.sqrMagnitude > 1e-8f ? flow.normalized : Vector3.zero;
-                    F.waterVerts[vi] = direction * (R + height + 0.02f);
-                    F.waterColors[vi] = new Color32((byte)(wave * 255f), (byte)(ice * 255f), 0, (byte)(turbulence * 255f));
-                    F.waterData[vi] = new Vector4(speed, sediment, waterDepth, surgeHeight);
-                }
-            });
-            F.waterTriangles.Clear();
-            int offset = f * n * n;
-            for (int j = 0; j < n; j++)
-                for (int i = 0; i < n; i++)
-                {
-                    int c = offset + j * n + i;
-                    float ground = S.Ground(c);
-                    if (S.water[c] <= (ground < S.SeaLevel ? 0.02f : 0.08f)) continue;
-                    int a = j * (n + 1) + i, b = a + 1, d = a + n + 2, cc = d - 1;
-                    F.waterTriangles.Add(a); F.waterTriangles.Add(b); F.waterTriangles.Add(cc);
-                    F.waterTriangles.Add(b); F.waterTriangles.Add(d); F.waterTriangles.Add(cc);
-                }
-            F.waterMesh.SetVertices(F.waterVerts, 0, vpf, MeshUpdateFlags.DontRecalculateBounds);
-            F.waterMesh.normals = customOceanMaterial ? F.waterFlows : F.waterVerts;
-            F.waterMesh.SetColors(F.waterColors);
-            F.waterMesh.SetUVs(0, F.waterData);
-            F.waterMesh.SetTriangles(F.waterTriangles, 0, false);
-            F.waterMesh.bounds = new Bounds(Vector3.zero, Vector3.one * R * 2.4f);
         }
 
         static Color32 To32(Color c, float a = 1f)
@@ -1043,47 +957,8 @@ namespace LivingPlanet
             cloudTimer += dt;
             if (cloudTimer > 0.15f) { UpdateClouds(camPos, cloudTimer); cloudTimer = 0f; }
             TickBolts(dt);
-            UpdateRivers(dt, camPos);
             UpdateSky(camPos);
             UpdatePrecip(dt, camPos, camFwd);
-        }
-
-        // ---------------------------------------------------------------- rivières
-        void UpdateRivers(float dt, Vector3 camPos)
-        {
-            riverB.n = 0;
-            float alt = camPos.magnitude - R;
-            if (alt > 700f) { dropN = 0; return; }
-            Vector3 cdir = camPos.normalized;
-            float reach = Mathf.Max(120f, alt * 1.6f) / R;
-            float maxD2 = (reach * R) * (reach * R);
-
-            // apparition : échantillonnage de cellules proches avec du débit
-            for (int s = 0; s < 80 && dropN < drops.Length; s++)
-            {
-                Vector3 off = new Vector3((float)vr.NextDouble() - 0.5f, (float)vr.NextDouble() - 0.5f, (float)vr.NextDouble() - 0.5f) * 2f * reach;
-                int c = G.CellFromDir(cdir + off);
-                if (S.flux[c] < 0.1f || S.rock[c] + S.sed[c] < 0.3f) continue;
-                drops[dropN++] = new Drop { dir = G.Dir[c], life = 2f + (float)vr.NextDouble() * 3f };
-            }
-
-            float step = dt / R;
-            for (int i = 0; i < dropN; i++)
-            {
-                Drop dp = drops[i];
-                int c = G.CellFromDir(dp.dir);
-                dp.life -= dt;
-                Vector3 flow = Vector3.zero;
-                for (int k = 0; k < 4; k++) flow += S.outW[c * 4 + k] * G.Tan[c * 4 + k];
-                float fl = S.flux[c];
-                if (dp.life <= 0f || fl < 0.06f || flow.sqrMagnitude < 1e-12f) { drops[i--] = drops[--dropN]; continue; }
-                flow = Vector3.ProjectOnPlane(flow, dp.dir).normalized;
-                dp.dir = (dp.dir + flow * step * (3f + 10f * Mathf.Min(fl, 1f))).normalized;
-                drops[i] = dp;
-                Vector3 pos = dp.dir * (R + S.Ground(c) + S.water[c] + 0.3f);
-                if ((pos - camPos).sqrMagnitude > maxD2) continue;
-                riverB.Add(Matrix4x4.TRS(pos, Quaternion.LookRotation(flow, dp.dir), new Vector3(0.4f, 0.12f, 1f)));
-            }
         }
 
         public void RefreshAll()
@@ -1456,7 +1331,6 @@ namespace LivingPlanet
             BuildVolcanoFX(lastCamPos);
             DrawBucket(smokeB, bounds, false);
             DrawBucket(emberB, bounds, false);
-            if (riverB != null) DrawBucket(riverB, bounds, false);
             if (icebergB != null) { BuildIcebergInstances(); DrawBucket(icebergB, bounds, true); }
             if (faunaB != null)
             {
@@ -1500,12 +1374,12 @@ namespace LivingPlanet
             {
                 var F = faces[f];
                 if (F == null) continue;
-                Own(owned, F.mesh); Own(owned, F.renderMesh); Own(owned, F.waterMesh); Own(owned, F.tex);
+                Own(owned, F.mesh); Own(owned, F.renderMesh); Own(owned, F.waterMesh); Own(owned, F.riverMesh); Own(owned, F.tex);
             }
             Own(owned, waterMaterial);
             Own(owned, buckets); Own(owned, faunaB); Own(owned, cloudB);
             if (flowB != null) for (int l = 0; l < flowB.Length; l++) Own(owned, flowB[l]);
-            Own(owned, new[] { riverB, icebergB, flameB, flameHot, smokeB, emberB, boltB,
+            Own(owned, new[] { icebergB, flameB, flameHot, smokeB, emberB, boltB,
                 astRock, astGlow, astTrail, astBall, astRing, astPath, astZone });
 
             var objects = new[]

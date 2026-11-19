@@ -793,10 +793,54 @@ public static class FlowValidation
         Check(high - low < 0.01f, "Deep water keeps sloshing instead of coming to rest: " + (high - low));
     }
 
+    // Eau retenue au-dessus du niveau de la mer après des années de pluie régulière (prélevée sur la mer pour
+    // conserver le volume), en épaisseur moyenne sur la planète : ce que les bassins fermés du relief généré
+    // accumulent au lieu de le rendre à la mer.
+    static float PerchedWater(int seed)
+    {
+        // Même taille de cellule et même mise à l'échelle du relief que la planète par défaut (128, 1200).
+        var s = new PlanetSim(new PlanetGrid(48, 450f));
+        s.ApplyAge(4.5f);
+        s.MaxHeight *= 2f; s.MountainAmp *= 2f;
+        s.Generate(seed);
+        const float rain = 0.01f;
+        for (int tick = 0; tick < 1500; tick++)
+        {
+            double wetted = 0, sea = 0;
+            for (int c = 0; c < s.M; c++)
+                if (s.IsOcean(c)) sea += s.G.Area[c]; else wetted += s.G.Area[c];
+            float taken = (float)(rain * wetted / sea);
+            for (int c = 0; c < s.M; c++)
+                if (s.IsOcean(c)) s.water[c] -= taken; else s.water[c] += rain;
+            s.tick = tick;
+            s.StepHydro();
+            s.StepCoastline();
+        }
+        double area = 0, perched = 0;
+        for (int c = 0; c < s.M; c++)
+        {
+            area += s.G.Area[c];
+            float above = s.Ground(c) + s.water[c] - s.SeaLevel - 1f;
+            if (above > 0f) perched += Mathf.Min(above, s.water[c]) * s.G.Area[c];
+        }
+        return (float)(perched / area);
+    }
+
+    static void GeneratedLandDrains()
+    {
+        foreach (int seed in new[] { 4242, 123, 777 })
+        {
+            float perched = PerchedWater(seed);
+            Debug.Log("Perched water, seed " + seed + ": " + perched);
+            Check(perched < 0.3f, "Generated terrain holds too much water above sea level (seed " + seed + "): " + perched);
+        }
+    }
+
     public static void RunDrainage()
     {
         DeepChannelCarriesItsFlow();
         DeepWaterComesToRest();
+        GeneratedLandDrains();
         Debug.Log("DRAINAGE VALIDATION PASSED");
     }
 
@@ -831,6 +875,7 @@ public static class FlowValidation
         CloudAdvection();
         DeepChannelCarriesItsFlow();
         DeepWaterComesToRest();
+        GeneratedLandDrains();
         Debug.Log("FLOW VALIDATION PASSED");
     }
 }

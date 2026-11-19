@@ -318,6 +318,7 @@ namespace LivingPlanet
                     wind[c] = Vector3.zero;
                 }
             });
+            DrainBasins();
             InitMaterials(rnd);
             Array.Clear(outW, 0, outW.Length);
             InitializeWater();

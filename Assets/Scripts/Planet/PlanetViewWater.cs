@@ -242,27 +242,47 @@ namespace LivingPlanet
             return G.CellSize * Mathf.Clamp(0.08f + 0.2f * Mathf.Sqrt(S.flux[c]), 0.1f, 0.38f);
         }
 
-        // Hauteur du terrain affiché dans la direction donnée (maillage fin compris), au-dessus du rayon.
-        float TerrainHeight(Vector3 direction)
+        static int FaceOf(Vector3 direction)
         {
             float ax = Mathf.Abs(direction.x), ay = Mathf.Abs(direction.y), az = Mathf.Abs(direction.z);
-            int f;
-            if (ax >= ay && ax >= az) f = direction.x > 0 ? 0 : 1;
-            else if (ay >= az) f = direction.y > 0 ? 2 : 3;
-            else f = direction.z > 0 ? 4 : 5;
-            var F = faces[f];
-            Vector3[] grid = MeshDetail > 1 ? F.fineVerts : F.verts;
-            int k = G.N * MeshDetail, k1 = k + 1;
+            if (ax >= ay && ax >= az) return direction.x > 0 ? 0 : 1;
+            if (ay >= az) return direction.y > 0 ? 2 : 3;
+            return direction.z > 0 ? 4 : 5;
+        }
+
+        // Rayon, dans la direction donnée, d'un maillage de face de k x k quads dont "grid" donne les sommets ;
+        // (i, j) reçoit le quad traversé. Même découpage en deux triangles que BuildGridMesh : (a, b, c) et (b, d, c).
+        static float SampleGrid(Vector3[] grid, int k, int f, Vector3 direction, out int i, out int j)
+        {
+            int k1 = k + 1;
             float dn = Vector3.Dot(direction, PlanetGrid.FaceN[f]);
             float fu = (Vector3.Dot(direction, PlanetGrid.FaceA[f]) / dn + 1f) * 0.5f * k;
             float fv = (Vector3.Dot(direction, PlanetGrid.FaceB[f]) / dn + 1f) * 0.5f * k;
-            int i = Mathf.Clamp((int)fu, 0, k - 1), j = Mathf.Clamp((int)fv, 0, k - 1);
+            i = Mathf.Clamp((int)fu, 0, k - 1); j = Mathf.Clamp((int)fv, 0, k - 1);
             float tu = Mathf.Clamp01(fu - i), tv = Mathf.Clamp01(fv - j);
             int a = j * k1 + i;
             float ha = grid[a].magnitude, hb = grid[a + 1].magnitude, hc = grid[a + k1].magnitude, hd = grid[a + k1 + 1].magnitude;
-            // Même découpage en deux triangles que BuildGridMesh : (a, b, c) et (b, d, c).
-            float h = tu + tv <= 1f ? ha + (hb - ha) * tu + (hc - ha) * tv : hd + (hc - hd) * (1f - tu) + (hb - hd) * (1f - tv);
-            return h - R;
+            return tu + tv <= 1f ? ha + (hb - ha) * tu + (hc - ha) * tv : hd + (hc - hd) * (1f - tu) + (hb - hd) * (1f - tv);
+        }
+
+        // Hauteur du terrain affiché dans la direction donnée (maillage fin compris), au-dessus du rayon.
+        float TerrainHeight(Vector3 direction)
+        {
+            int f = FaceOf(direction), i, j;
+            var F = faces[f];
+            return SampleGrid(MeshDetail > 1 ? F.fineVerts : F.verts, G.N * MeshDetail, f, direction, out i, out j) - R;
+        }
+
+        // La nappe (mer, lac) passe-t-elle au-dessus de ce point de ruban ? Lu sur la nappe réellement dessinée :
+        // au fond d'un chenal étroit, le terrain lissé la cache et le ruban doit rester visible.
+        bool UnderNappe(Vector3 direction, float height)
+        {
+            int f = FaceOf(direction), i, j;
+            var F = faces[f];
+            float level = SampleGrid(F.waterVerts, G.N, f, direction, out i, out j) - R;
+            int local = j * G.N + i;
+            if (!ShowsWater(f * G.N * G.N + local) && float.IsNaN(F.shoreLevel[local])) return false;
+            return level > height + 0.5f;
         }
 
         // Chaque cellule de rivière relie le milieu de son arête amont au milieu de son arête aval par une courbe
@@ -309,8 +329,6 @@ namespace LivingPlanet
             Vector3 center = G.Dir[c];
             float speed = Mathf.Clamp01(S.flux[c]);
             float sediment = Mathf.Clamp01(S.susp[c] / Mathf.Max(S.water[c], 0.01f));
-            // Sous la nappe d'un lac ou d'un fleuve large, le ruban ferait double emploi : on l'efface.
-            float nappe = ShowsWater(c) ? S.Ground(c) + S.water[c] - 0.05f : float.MinValue;
             int first = riverVerts.Count;
             for (int s = 0; s <= RiverSegments; s++)
             {
@@ -326,8 +344,9 @@ namespace LivingPlanet
                     riverFlows.Add(tangent);
                     riverSlopes.Add(Vector3.zero);
                     riverColors.Add(new Color32(20, 0, 255, 0));
-                    // Profondeur négative sur les bords et sous une nappe : le shader y fond puis efface le ruban.
-                    riverData.Add(new Vector4(speed, sediment, height < nappe ? -1f : side == 0 ? 4f : -0.15f, 0f));
+                    // Profondeur négative sur les bords, et sous une nappe où le ruban ferait double emploi :
+                    // le shader y fond puis efface le ruban.
+                    riverData.Add(new Vector4(speed, sediment, UnderNappe(direction, height) ? -1f : side == 0 ? 4f : -0.15f, 0f));
                 }
                 if (s == 0) continue;
                 int row = first + s * 3, previous = row - 3;

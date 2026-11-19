@@ -3,17 +3,22 @@ Shader "LivingPlanet/Ocean"
     Properties
     {
         _LP_WaterRoughness ("Water roughness", Range(0, 1)) = 0.08
-        _LP_ShallowColor ("Shallow water", Color) = (0.025, 0.22, 0.31, 1)
-        _LP_DeepColor ("Deep water", Color) = (0.008, 0.065, 0.16, 1)
+        _LP_ShoreColor ("Shore water", Color) = (0.10, 0.44, 0.47, 1)
+        _LP_ShallowColor ("Shallow water", Color) = (0.03, 0.24, 0.36, 1)
+        _LP_DeepColor ("Deep water", Color) = (0.008, 0.065, 0.17, 1)
+        [HideInInspector] _LP_WaterTime ("Water time", Float) = 0
     }
 
     SubShader
     {
-        Tags { "RenderType"="Opaque" "Queue"="Geometry" "RenderPipeline"="UniversalPipeline" }
+        // L'eau est rendue après le terrain et mélangée à lui : le fond transparaît près des rives. Elle écrit
+        // quand même sa profondeur, pour que l'atmosphère, la pluie et les rubans de rivière se placent bien.
+        Tags { "RenderType"="Transparent" "Queue"="Transparent-100" "RenderPipeline"="UniversalPipeline" }
         Pass
         {
             Name "Ocean"
             Tags { "LightMode"="UniversalForward" }
+            Blend SrcAlpha OneMinusSrcAlpha
             ZWrite On
             Cull Back
 
@@ -24,17 +29,24 @@ Shader "LivingPlanet/Ocean"
             #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl"
             #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Lighting.hlsl"
 
-            struct Attr { float4 pos : POSITION; float3 normal : NORMAL; float4 col : COLOR; float4 water : TEXCOORD0; };
-            struct Vary { float4 cs : SV_POSITION; float3 ws : TEXCOORD0; float4 ai : TEXCOORD1; float fog : TEXCOORD2; float3 flow : TEXCOORD3; float4 water : TEXCOORD4; };
+            // water : x vitesse du courant, y charge en sédiments, z profondeur locale (négative sous la berge),
+            //         w hauteur de l'onde de tsunami.
+            // slope : pente de la surface de l'eau (vecteur tangent, en repère objet).
+            struct Attr { float4 pos : POSITION; float3 normal : NORMAL; float4 col : COLOR; float4 water : TEXCOORD0; float3 slope : TEXCOORD1; };
+            struct Vary
+            {
+                float4 cs : SV_POSITION; float3 ws : TEXCOORD0; float4 ai : TEXCOORD1; float fog : TEXCOORD2;
+                float3 flow : TEXCOORD3; float4 water : TEXCOORD4; float3 slope : TEXCOORD5;
+            };
 
+            CBUFFER_START(UnityPerMaterial)
             float _LP_WaterRoughness;
             float _LP_WaterTime;
+            float4 _LP_ShoreColor;
             float4 _LP_ShallowColor;
             float4 _LP_DeepColor;
+            CBUFFER_END
 
-            // Bruit de valeur 3D bon marché (sans texture, juste des hash) utilisé pour déformer les vagues
-            // planes ci-dessous : sans lui, dot(p, direction_fixe) dessine des cercles concentriques parfaits
-            // autour de chaque direction sur une sphère, ce qui donnait les ronds de vagues bien trop visibles.
             float hash31(float3 p)
             {
                 p = frac(p * 0.3183099 + float3(0.71, 0.113, 0.419));
@@ -42,11 +54,13 @@ Shader "LivingPlanet/Ocean"
                 return frac(p.x * p.y * p.z * (p.x + p.y + p.z));
             }
 
+            // Bruit de valeur 3D (sans texture), à interpolation quintique pour que sa dérivée reste lisse :
+            // c'est elle qui sert de relief aux vaguelettes.
             float noise3(float3 x)
             {
                 float3 i = floor(x);
                 float3 f = frac(x);
-                f = f * f * (3.0 - 2.0 * f);
+                f = f * f * f * (f * (f * 6.0 - 15.0) + 10.0);
                 float n000 = hash31(i + float3(0, 0, 0));
                 float n100 = hash31(i + float3(1, 0, 0));
                 float n010 = hash31(i + float3(0, 1, 0));
@@ -64,13 +78,26 @@ Shader "LivingPlanet/Ocean"
                 return lerp(nxy0, nxy1, f.z);
             }
 
+            // Pente d'un champ de vaguelettes de longueur d'onde 1/freq, qui dérive à la vitesse "drift".
+            // Elle s'efface quand une vaguelette devient plus petite que deux pixels : sinon elle scintille et
+            // dessine des moirés dès qu'on prend de l'altitude.
+            float3 ripple(float3 p, float freq, float3 drift, float footprint)
+            {
+                float3 q = p * freq + drift;
+                float e = 0.35;
+                float c = noise3(q);
+                float3 g = float3(noise3(q + float3(e, 0, 0)) - c, noise3(q + float3(0, e, 0)) - c, noise3(q + float3(0, 0, e)) - c) / e;
+                return g * (1.0 - smoothstep(0.06, 0.18, footprint * freq));
+            }
+
             Vary vert(Attr i)
             {
                 Vary o;
                 o.ws = TransformObjectToWorld(i.pos.xyz);
                 o.cs = TransformWorldToHClip(o.ws);
-                o.ai = i.col; // r : agitation, g : glace, a : turbulence côtière
+                o.ai = i.col; // r : agitation, g : glace, b : ruban de rivière, a : turbulence (déferlement d'un tsunami)
                 o.flow = TransformObjectToWorldDir(i.normal);
+                o.slope = TransformObjectToWorldDir(i.slope, false);
                 o.water = i.water;
                 o.fog = ComputeFogFactor(o.cs.z);
                 return o;
@@ -80,73 +107,81 @@ Shader "LivingPlanet/Ocean"
             {
                 float3 p = i.ws;
                 float3 n0 = normalize(p);
-                float3 surface = cross(ddy(p), ddx(p));
-                float surfaceLength = dot(surface, surface);
-                float3 surfaceNormal = surfaceLength > 1e-10 ? surface * rsqrt(surfaceLength) : n0;
-                surfaceNormal *= dot(surfaceNormal, n0) < 0.0 ? -1.0 : 1.0;
-                surfaceNormal = normalize(lerp(n0, surfaceNormal, 0.08));
                 float amp = i.ai.x;
                 float ice = i.ai.y;
                 float depth = i.water.z;
                 float t = _LP_WaterTime;
+                float footprint = length(fwidth(p));
 
-                float warp = noise3(p * 0.025 + float3(0.0, 0.0, t * 0.012)) - 0.5;
-                float3 pw = p + warp * float3(2.4, 1.8, 2.1);
-
-                float3 k1 = float3(0.82, 0.41, 0.40);
-                float3 k2 = float3(-0.35, 0.62, 0.70);
-                float3 k3 = float3(0.30, -0.80, 0.52);
+                // Surface : la sphère, inclinée par la pente réelle de l'eau (houle de fond, onde de tsunami),
+                // puis froissée par deux échelles de vaguelettes qui dérivent avec le courant.
                 float3 flow = i.flow - n0 * dot(i.flow, n0);
-                if (dot(flow, flow) > 0.0001)
-                {
-                    float3 along = normalize(flow);
-                    float3 across = normalize(cross(n0, along));
-                    k1 = normalize(k1 + along * 0.8);
-                    k2 = normalize(k2 + across * 0.5 + along * 0.35);
-                    k3 = normalize(k3 - across * 0.45 + along * 0.2);
-                }
-                float p1 = dot(pw, k1) * 0.18 + t * 0.18;
-                float p2 = dot(pw, k2) * 0.28 + t * 0.25;
-                float p3 = dot(pw, k3) * 0.38 - t * 0.30;
-                float3 grad = k1 * cos(p1) * 0.4 * (1.0 - smoothstep(0.6, 1.5, fwidth(p1)))
-                    + k2 * cos(p2) * 0.3 * (1.0 - smoothstep(0.6, 1.5, fwidth(p2)))
-                    + k3 * cos(p3) * 0.2 * (1.0 - smoothstep(0.6, 1.5, fwidth(p3)));
+                float flowLength = length(flow);
+                float3 alongFlow = flowLength > 0.001 ? flow / flowLength : float3(0, 0, 0);
+                float3 drift = alongFlow * t * (0.25 + i.water.x * 0.9);
+                float3 grad = ripple(p, 0.33, float3(0.0, t * 0.11, 0.0) - drift * 0.33, footprint) * 0.9
+                    + ripple(p, 1.15, float3(t * 0.23, 0.0, t * 0.17) - drift * 1.15, footprint) * 0.6;
                 grad -= n0 * dot(grad, n0);
-                float3 n = normalize(surfaceNormal - grad * (0.025 + amp * 0.055));
+                float3 slope = i.slope - n0 * dot(i.slope, n0);
+                float3 n = normalize(n0 - slope * 1.6 - grad * (0.035 + amp * 0.085));
 
                 Light l = GetMainLight();
                 float3 L = l.direction;
                 float3 V = normalize(_WorldSpaceCameraPos - p);
                 float day = saturate(dot(n0, L) * 2.0 + 0.3);
-
                 float diff = saturate(dot(n, L));
-                // La couleur dépend de la profondeur, indépendamment de l'opacité du maillage.
-                float absorption = smoothstep(0.0, 100.0, depth);
-                float3 baseC = lerp(_LP_ShallowColor.rgb, _LP_DeepColor.rgb, absorption);
-                baseC = lerp(baseC, float3(0.30, 0.24, 0.15), saturate(i.water.y * 2.0) * 0.65);
-                float3 col = baseC * (0.12 + 0.55 * diff) * (0.35 + 0.65 * day);
+
+                // Couleur selon la profondeur : turquoise sur les hauts-fonds, bleu, puis bleu nuit au large.
+                float3 baseC = lerp(_LP_ShoreColor.rgb, _LP_ShallowColor.rgb, smoothstep(0.0, 9.0, depth));
+                baseC = lerp(baseC, _LP_DeepColor.rgb, smoothstep(6.0, 70.0, depth));
+                baseC = lerp(baseC, float3(0.33, 0.27, 0.16), saturate(i.water.y * 2.0) * 0.4);
+                float3 col = baseC * (0.22 + 0.62 * diff) * (0.35 + 0.65 * day);
 
                 float3 H = normalize(L + V);
-                float roughness = saturate(0.25 + _LP_WaterRoughness + amp * 0.08);
-                float specPower = lerp(96.0, 24.0, roughness);
+                float roughness = saturate(0.22 + _LP_WaterRoughness + amp * 0.1);
+                float specPower = lerp(140.0, 28.0, roughness);
                 float fres = 0.02 + 0.98 * pow(1.0 - saturate(dot(n, V)), 5.0);
-                float spec = pow(saturate(dot(n, H)), specPower) * (2.0 - roughness) * day * (0.12 + 0.88 * fres);
+                // Vu de loin, un pixel couvre des milliers de vaguelettes : le reflet du soleil s'étale et pâlit.
+                float distant = smoothstep(0.08, 1.2, footprint);
+                float spec = pow(saturate(dot(n, H)), lerp(specPower, 36.0, distant)) * (2.2 - roughness) * day * lerp(1.0, 0.16, distant);
                 float3 sky = GlossyEnvironmentReflection(reflect(-V, n), p, roughness, 1.0) * (0.1 + 0.9 * day);
-                sky = max(sky, float3(0.18, 0.36, 0.60) * (0.1 + 0.9 * day));
-                col = lerp(col, sky, fres) + spec * l.color * 0.35;
+                sky = max(sky, float3(0.20, 0.38, 0.62) * (0.1 + 0.9 * day));
+                col = lerp(col, sky, fres * 0.85) + spec * l.color * 0.26;
 
-                float flowLength = length(flow);
-                float3 alongFlow = flowLength > 0.001 ? flow / flowLength : float3(0, 0, 0);
-                float streak = noise3(p * 0.035 - alongFlow * t * (0.08 + i.water.x * 0.28));
-                col += float3(0.018, 0.036, 0.045) * (streak - 0.5) * i.water.x * day;
-                float crest = smoothstep(0.25, 4.0, i.water.w);
-                float trough = smoothstep(0.25, 4.0, -i.water.w);
-                col *= 1.0 - 0.12 * trough;
-                col += float3(0.015, 0.07, 0.09) * crest * (0.65 + 0.35 * streak) * day;
-                col = lerp(col, float3(0.32, 0.52, 0.55) * (0.25 + 0.75 * day), i.ai.a * 0.25);
+                // Onde de tsunami : crête éclaircie, creux assombri, et écume là où le front est raide.
+                float crest = smoothstep(0.15, 2.5, i.water.w);
+                float trough = smoothstep(0.15, 2.5, -i.water.w);
+                col *= 1.0 - 0.22 * trough;
+                col += float3(0.05, 0.13, 0.15) * crest * day;
+                float steep = length(slope);
+
+                // Écume : liseré de vagues le long des rives (discret par temps calme), moutons par gros temps,
+                // déferlement des tsunamis.
+                float foamNoise = noise3(p * 0.55 + float3(t * 0.21, t * 0.13, -t * 0.17)) * 0.6
+                    + noise3(p * 1.7 - float3(t * 0.3, 0.0, t * 0.26)) * 0.4;
+                float surf = 0.5 + 0.5 * sin(depth * 7.0 - t * 1.4 + foamNoise * 6.0);
+                // Le liseré ne se forme que là où le fond remonte franchement : pas sur une lame d'eau étale.
+                float beach = smoothstep(0.015, 0.06, fwidth(depth) / max(footprint, 1e-4));
+                float shore = (1.0 - smoothstep(0.1, 0.9, depth)) * smoothstep(-0.3, 0.1, depth) * beach * (1.0 - i.ai.z);
+                float foam = shore * smoothstep(0.55, 0.95, foamNoise * 0.5 + surf * 0.6) * (0.2 + 0.8 * amp);
+                foam += smoothstep(0.7, 0.95, foamNoise + amp * 0.3 - 0.2) * smoothstep(0.7, 1.0, amp) * 0.6;
+                foam += saturate(i.ai.a * 1.6 + smoothstep(0.05, 0.22, steep) * crest) * smoothstep(0.3, 0.75, foamNoise + 0.25);
+                foam = saturate(foam) * (1.0 - smoothstep(0.4, 1.6, footprint) * 0.7);
+                col = lerp(col, float3(0.92, 0.96, 0.97) * (0.22 + 0.78 * day), foam * 0.75);
+
                 col = lerp(col, float3(0.85, 0.9, 0.95) * (0.2 + 0.8 * day), ice);
+
+                // Transparence : le fond se devine sous quelques unités d'eau, la rive est fondue. Les reflets
+                // rasants, l'écume et la glace restent opaques.
+                float alpha = lerp(0.55, 0.97, smoothstep(0.0, 8.0, depth));
+                alpha = lerp(alpha, 1.0, saturate(fres * 0.9 + foam + ice));
+                // Un ruban de rivière reste presque opaque, sinon ses tronçons superposés se voient aux confluents.
+                alpha = lerp(alpha, max(alpha, 0.9), i.ai.z);
+                alpha *= smoothstep(-0.3, 0.25, depth);
+                clip(alpha - 0.01);
+
                 col = MixFog(col, i.fog);
-                return half4(col, 1.0);
+                return half4(col, alpha);
             }
             ENDHLSL
         }

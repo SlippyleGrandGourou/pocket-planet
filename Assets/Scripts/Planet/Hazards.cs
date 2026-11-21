@@ -554,16 +554,20 @@ namespace LivingPlanet
             if (tsunamis.Count == 0 || dt <= 0f) return false;
             TrackTsunamiCells();
             tsunamiAccum += dt;
-            const float step = 0.1f;
+            // L'onde avance d'une demi-cellule par sous-pas : sa vitesse est la même sur le terrain quelle que
+            // soit la résolution de la planète, et le calcul reste stable.
+            float step = 0.5f * G.CellSize / TsunamiSpeed;
             int steps = 0;
             while (tsunamiAccum >= step && steps++ < 4)
             {
-                StepTsunamiWater(step);
+                bool calming = true;
+                for (int i = 0; i < tsunamis.Count; i++) calming &= tsunamis[i].ang >= TsunamiLife;
+                StepTsunamiWater(step, calming ? TsunamiCalmInertia : TsunamiInertia);
                 tsunamiAccum -= step;
                 for (int i = tsunamis.Count - 1; i >= 0; i--)
                 {
                     tsunamis[i].ang += step;
-                    if (tsunamis[i].ang >= 90f) tsunamis.RemoveAt(i);
+                    if (tsunamis[i].ang >= TsunamiLife + TsunamiCalm) tsunamis.RemoveAt(i);
                 }
                 if (tsunamis.Count == 0) break;
             }
@@ -583,6 +587,14 @@ namespace LivingPlanet
             return tsunamis.Count > 0 && tsunamiActive[c] != 0
                 ? Ground(c) + water[c] - tsunamiBase[c] : 0f;
         }
+
+        const float TsunamiSpeed = 75f;         // vitesse de l'onde sur le terrain, en unités par seconde
+        const float TsunamiLife = 30f;          // durée de propagation, en secondes
+        const float TsunamiCalm = 6f;           // puis durée d'apaisement, où la mer se remet à plat
+        const float TsunamiInertia = 0.99f;     // part de l'élan gardée à chaque sous-pas pendant la propagation
+        const float TsunamiCalmInertia = 0.5f;  // et pendant l'apaisement : l'eau ne fait plus que s'étaler
+        const float TsunamiJoinHeight = 0.05f;  // écart de surface à partir duquel une cellule de mer rejoint l'onde
+        const float TsunamiScourDepth = 8f;     // profondeur au-delà de laquelle l'onde ne touche plus le fond
 
         // Débit minimal (épaisseur par sous-pas) reçu d'une voisine active pour qu'une cellule terrestre rejoigne
         // l'onde : au-dessus du ruissellement d'une simple pellicule de pluie, très en dessous d'une vraie vague.
@@ -605,7 +617,7 @@ namespace LivingPlanet
             tsunamiCells[tsunamiCellCount++] = c;
         }
 
-        void StepTsunamiWater(float dt)
+        void StepTsunamiWater(float dt, float inertia)
         {
             // L'onde n'active que les cellules qu'elle atteint, sans perturber les lacs et rivières éloignés,
             // et le calcul ne parcourt que ces cellules et leurs voisines, pas toute la planète.
@@ -625,7 +637,7 @@ namespace LivingPlanet
                     if (IsOcean(c) && IsOcean(n))
                     {
                         float head = Ground(n) + water[n] - tsunamiBase[n];
-                        joins = Mathf.Abs(head) > 0.01f || Mathf.Abs(tsunamiMomentum[toward]) > 0.01f;
+                        joins = Mathf.Abs(head) > TsunamiJoinHeight || Mathf.Abs(tsunamiMomentum[toward]) * dt > TsunamiReachFlow;
                     }
                     // Débit du pas précédent, relu depuis l'inertie (sauvegardée) plutôt que depuis
                     // tsunamiOut (non sauvegardé) : le résultat reste identique après un rechargement.
@@ -648,7 +660,9 @@ namespace LivingPlanet
                         float other = Ground(n) + water[n] - tsunamiBase[n];
                         // Pression et inertie sur chaque arête ; la surface de référence retire les pentes
                         // préexistantes de l'océan sans supprimer les crêtes et creux créés par l'onde.
-                        float v = tsunamiMomentum[edge] * 0.997f + (head - other) * 2f * dt;
+                        // Un quart de l'écart de surface par sous-pas : c'est ce qui fait avancer l'onde d'une
+                        // demi-cellule à chaque fois.
+                        float v = tsunamiMomentum[edge] * inertia + (head - other) * 0.25f / dt;
                         if (water[c] <= 0.001f && v > 0f) v = 0f;
                         if (water[n] <= 0.001f && v < 0f) v = 0f;
                         if (water[n] <= 0.001f && head <= other && v > 0f) v = 0f;
@@ -728,8 +742,10 @@ namespace LivingPlanet
 
         float ErodeTsunamiBed(int c, float movingWater, float dt)
         {
-            if (movingWater <= 0.0001f) return 0f;
-            float want = Mathf.Min(maxErode * dt, movingWater * 0.08f * erosionScale);
+            // Au large, l'onde passe loin au-dessus du fond : elle ne l'arrache que là où l'eau est peu profonde.
+            float shallow = Mathf.Clamp01(1f - water[c] / TsunamiScourDepth);
+            if (movingWater <= 0.0001f || shallow <= 0f) return 0f;
+            float want = Mathf.Min(maxErode * dt, movingWater * 0.08f * erosionScale) * shallow;
             float soil = ErodeSoil(c, want * ErodibilityAt(c));
             float stone = sed[c] < 0.05f
                 ? Mathf.Max(0f, want - soil) * RockErodibilityAt(c) * 0.5f : 0f;

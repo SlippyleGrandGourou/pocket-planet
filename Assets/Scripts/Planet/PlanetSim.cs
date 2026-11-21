@@ -350,6 +350,12 @@ namespace LivingPlanet
             float decl0 = Declination;
             if (pres == null) pres = new float[M];
             StepPressure();
+            if (continents == null) continents = new Continentality(G);
+            continents.Refresh(this);
+            var lands = continents;
+            float landMean = lands.Mean;
+            // Les ceintures de pression et de vent suivent le soleil d'une saison à l'autre.
+            float seasonShift = 0.45f * decl0;
             int pn = pressDir.Length;
             var pDir = pressDir; var pAmp = pressAmp; var pSgn = pressSgn; var pRad = pressRad;
             Par.For(M, (s, e) =>
@@ -357,7 +363,6 @@ namespace LivingPlanet
                 for (int c = s; c < e; c++)
                 {
                     Vector3 d = G.Dir[c];
-                    float g0 = rock[c] + sed[c];
                     float lat = Mathf.Asin(Mathf.Clamp(d.y, -1f, 1f));
                     // Est = sens de rotation de la planète = longitudes croissantes (voir PlanetView.SunDir).
                     Vector3 east = new Vector3(-d.z, 0f, d.x);
@@ -368,15 +373,26 @@ namespace LivingPlanet
 
                     // circulation générale : alizés, vents d'ouest, vents polaires (cellules de Hadley / Ferrel / polaire)
                     float lon = Mathf.Atan2(d.z, d.x);
-                    float jetLat = lat - 0.12f * Mathf.Cos(lat) * Mathf.Sin(3f * lon + t * 0.3f + 0.4f * Mathf.Sin(2f * lat));
+                    // Les ceintures ondulent : une onde planétaire presque fixe et une onde plus courte qui se déplace.
+                    float wave = Mathf.Sin(3f * lon + t * 0.3f + 0.4f * Mathf.Sin(2f * lat)) + 0.6f * Mathf.Sin(5f * lon - t * 2f + 1.7f);
+                    float jetLat = lat - seasonShift * Mathf.Cos(lat) - 0.14f * Mathf.Cos(lat) * wave;
                     float tl = Mathf.Abs(jetLat) / (Mathf.PI * 0.5f);
                     float u = tl < 0.667f ? -Mathf.Cos(3f * jetLat) : Mathf.Lerp(1f, -0.35f, Mathf.SmoothStep(0f, 1f, (tl - 0.667f) / 0.333f));
                     float v = -Mathf.Sin(6f * jetLat) * 0.35f;
                     float n1 = Noise.Perlin(d.x * 2.5f + t, d.y * 2.5f, d.z * 2.5f);
                     float n2 = Noise.Perlin(d.x * 2.5f, d.y * 2.5f + 7.1f, d.z * 2.5f + t);
                     Vector3 w = (east * (u + 0.5f * n1) + north * (v + 0.5f * n2)) * 0.3f;
-                    float pr = -Mathf.Cos(6f * lat);
-                    if (g0 > SeaLevel) { float bt = -32f + 66f * Mathf.Pow(Mathf.Max(0f, Mathf.Cos(lat - decl0)), 0.8f); pr -= Mathf.Clamp((temp[c] - bt) * 0.03f, -0.6f, 0.6f); }
+                    // Ceintures de pression (basses à l'équateur et vers 60°, hautes vers 30° et aux pôles), d'intensité
+                    // inégale d'une région à l'autre.
+                    float belt = 0.45f * (1f + 0.7f * Noise.Perlin(d.x * 1.3f + 11.3f, d.y * 1.3f + t * 0.5f, d.z * 1.3f - 4.7f));
+                    float pr = -Mathf.Cos(6f * jetLat) * belt;
+                    // Centres d'action : un continent chauffe et refroidit plus vite que l'océan. Dépression thermique
+                    // sur les terres en été et anticyclone en hiver, l'inverse sur les océans ; toute l'année, les terres
+                    // chaudes des basses latitudes creusent la pression et les terres froides des hautes latitudes la relèvent.
+                    float landAround = lands.At(c), land = landAround - landMean;
+                    // Chauffage saisonnier : ensoleillement du moment comparé à sa moyenne sur l'année.
+                    float heat = Mathf.Max(0f, Mathf.Cos(lat - decl0)) - Mathf.Cos(lat);
+                    pr -= land * (ThermalPressure * heat + 0.8f * Mathf.Cos(2f * lat));
 
                     // dépressions et anticyclones : la force de Coriolis les fait tourner (anti-horaire au nord, horaire au sud pour une dépression)
                     float front = 0f;
@@ -388,9 +404,10 @@ namespace LivingPlanet
                         float th = Mathf.Acos(Mathf.Min(1f, dt));
                         float x = th / pRad[i];
                         float fall = Mathf.Exp(-x * x);
-                        float prof = x * Mathf.Exp(1f - x * x);
                         pr -= pSgn[i] * pAmp[i] * fall * 1.1f;
-                        front += pSgn[i] > 0f ? pAmp[i] * fall : -0.5f * pAmp[i] * fall;
+                        // Le mauvais temps tient au cœur de la dépression (moitié du rayon) : étendu à tout son disque,
+                        // les dépressions des latitudes moyennes se touchent et referment une bande nuageuse continue.
+                        front += pSgn[i] > 0f ? pAmp[i] * fall * fall * fall * fall : -0.5f * pAmp[i] * fall;
                     }
                     wind[c] = w;
                     windHigh[c] = w * 1.6f;
@@ -398,7 +415,9 @@ namespace LivingPlanet
                     // thOut est réutilisé temporairement avant les calculs d'érosion.
                     thOut[c * 4] = Noise.Perlin(d.x * 4f + t * 0.23f, d.y * 4f + t * 0.17f, d.z * 4f - t * 0.19f);
                     float nz = Mathf.Clamp01(Noise.Fbm(d * 3.2f + new Vector3(t * 3f, 0f, t * 2f), 2) * 1.2f);
-                    frontN[c] = Mathf.Clamp01(0.15f + 0.75f * front + 0.3f * nz);
+                    // Ascendances : fronts des dépressions, et convection d'été au-dessus des terres chauffées.
+                    float convection = 4f * Mathf.Max(0f, landAround * heat);
+                    frontN[c] = Mathf.Clamp01(0.15f + 0.75f * front + 0.3f * nz + convection);
                 }
             });
             ApplyBlowToPressure();
@@ -409,6 +428,38 @@ namespace LivingPlanet
         }
 
         public float[] pres;
+        const float ThermalPressure = 4f;
+        Continentality continents;
+
+        // Pente d'un champ à la surface, par moindres carrés sur les quatre voisines. Additionner simplement les
+        // quatre différences suppose des voisines opposées deux à deux ; c'est faux le long des bords de face du
+        // cube, où les lignes de la grille font un angle, et le vent y prenait une composante parasite qui
+        // faisait converger l'air (lignes de pluie et de nuages sur les arêtes du cube).
+        Vector3 SurfaceGradient(float[] field, int stride, int c)
+        {
+            // Écrit composante par composante : appelé deux fois par cellule à chaque mise à jour du vent.
+            int b = c * 4;
+            var nbr = G.Nbr; var tan = G.Tan; var dist = G.Dist;
+            int first = 0;
+            while (first < 4 && nbr[b + first] < 0) first++;
+            if (first == 4) return Vector3.zero;
+            Vector3 e1 = tan[b + first], e2 = Vector3.Cross(G.Dir[c], e1);
+            float here = field[c * stride];
+            float xx = 0f, xy = 0f, yy = 0f, xv = 0f, yv = 0f;
+            for (int k = first; k < 4; k++)
+            {
+                int n = nbr[b + k];
+                if (n < 0) continue;
+                Vector3 t = tan[b + k];
+                float x = t.x * e1.x + t.y * e1.y + t.z * e1.z, y = t.x * e2.x + t.y * e2.y + t.z * e2.z;
+                float v = (field[n * stride] - here) / Mathf.Max(dist[b + k], 1e-4f);
+                xx += x * x; xy += x * y; yy += y * y; xv += x * v; yv += y * v;
+            }
+            float det = xx * yy - xy * xy;
+            if (det < 1e-6f) return Vector3.zero;
+            float gx = (yy * xv - xy * yv) / det, gy = (xx * yv - xy * xv) / det;
+            return new Vector3(e1.x * gx + e2.x * gy, e1.y * gx + e2.y * gy, e1.z * gx + e2.z * gy);
+        }
 
         void WindEddies()
         {
@@ -416,15 +467,7 @@ namespace LivingPlanet
             {
                 for (int c = s; c < e; c++)
                 {
-                    int b = c * 4;
-                    Vector3 gradient = Vector3.zero;
-                    for (int k = 0; k < 4; k++)
-                    {
-                        int n = G.Nbr[b + k];
-                        if (n < 0) continue;
-                        gradient += G.Tan[b + k] * ((thOut[n * 4] - thOut[b]) / Mathf.Max(G.Dist[b + k], 1e-4f));
-                    }
-                    Vector3 eddy = Vector3.Cross(G.Dir[c], gradient) * (0.5f * G.Radius);
+                    Vector3 eddy = Vector3.Cross(G.Dir[c], SurfaceGradient(thOut, 4, c)) * G.Radius;
                     wind[c] = Vector3.ClampMagnitude(wind[c] + eddy * 0.075f, 1.5f);
                     windHigh[c] = Vector3.ClampMagnitude(windHigh[c] + eddy * 0.12f, 2.5f);
                 }
@@ -434,22 +477,13 @@ namespace LivingPlanet
         // vent géostrophique (Coriolis) + écoulement vers les basses pressions près de l'équateur et par friction
         void WindFromPressure()
         {
-            var nbr = G.Nbr; var tan = G.Tan; var dist = G.Dist;
             float R = G.CellSize * Mathf.Sqrt(M / 6f) * 2f / Mathf.PI;
             float kR = R / 6f;
             Par.For(M, (s, e) =>
             {
                 for (int c = s; c < e; c++)
                 {
-                    int b = c * 4;
-                    Vector3 gr = Vector3.zero;
-                    for (int k = 0; k < 4; k++)
-                    {
-                        int n = nbr[b + k];
-                        if (n < 0) continue;
-                        gr += tan[b + k] * ((pres[n] - pres[c]) / dist[b + k]);
-                    }
-                    gr *= 0.5f * kR;
+                    Vector3 gr = SurfaceGradient(pres, 1, c) * kR;
                     Vector3 d = G.Dir[c];
                     float sl = d.y;
                     float cf = Mathf.Clamp01(Mathf.Abs(sl) * 3.5f * spinRate);
@@ -462,6 +496,12 @@ namespace LivingPlanet
             });
         }
 
+        // Pluie à l'intérieur des terres : l'air marin ne doit pas tout lâcher sur la première pente. Le relief
+        // soulève moins brutalement, l'excès d'humidité tombe en plusieurs cellules au lieu d'une seule, les sols
+        // humides rendent leur eau à l'air qui passe, et l'air se brasse d'une cellule à l'autre.
+        const float SeaAirHumidity = 0.85f;
+        const float ReliefLift = 3f, MaxReliefLift = 0.4f, RainOut = 0.12f, LandEvaporation = 0.03f, AirMixing = 0.04f;
+
         public void StepClimate()
         {
             if (tick % 5 == 0) UpdateWind();
@@ -471,6 +511,12 @@ namespace LivingPlanet
             float rate = precipRate;
             float mScale = moistScale;
             var nbr = G.Nbr; var back = G.Back; var tan = G.Tan; var dist = G.Dist;
+            // L'air sort d'une cellule par ses arêtes, en proportion du vent qui les traverse (EdgeFlux : arête
+            // orientée vers l'extérieur). Compter le vent vers le centre des voisines créait une convergence
+            // fictive le long des bords de face du cube, où les lignes de la grille font un angle : il y pleuvait
+            // deux à trois fois trop, en lignes visibles.
+            var dirs = G.Dir; var edge = G.EdgeFlux; var area = G.Area;
+            float reach = adv * G.CellSize * G.Radius;
 
             Par.For(M, (s, e) =>
             {
@@ -478,9 +524,10 @@ namespace LivingPlanet
                 {
                     float outgoing = 0f;
                     int b = c * 4;
+                    Vector3 turn = Vector3.Cross(dirs[c], wind[c]);
                     for (int k = 0; k < 4; k++)
                         if (nbr[b + k] >= 0)
-                            outgoing += Mathf.Max(0f, Vector3.Dot(wind[c], tan[b + k])) * adv;
+                            outgoing += Mathf.Max(0f, Vector3.Dot(turn, edge[b + k])) * reach / area[c];
                     waterState.airOutScale[c] = outgoing > 1f ? 1f / outgoing : 1f;
                 }
             });
@@ -499,29 +546,35 @@ namespace LivingPlanet
                     float sat = Sat(t);
 
                     Vector3 wc = wind[c];
-                    float outFrac = 0f, inflow = 0f, slopeAlong = 0f;
+                    Vector3 turn = Vector3.Cross(dirs[c], wc);
+                    float outFrac = 0f, inflow = 0f, slopeAlong = 0f, mixing = 0f;
                     for (int k = 0; k < 4; k++)
                     {
                         int n = nbr[b + k];
                         if (n < 0) continue;
                         float dd = Vector3.Dot(wc, tan[b + k]);
+                        outFrac += Mathf.Max(0f, Vector3.Dot(turn, edge[b + k])) * reach / area[c] * waterState.airOutScale[c];
                         if (dd > 0f)
                         {
-                            outFrac += dd * adv * waterState.airOutScale[c];
                             float gn = rock[n] + sed[n];
                             slopeAlong += dd * (Mathf.Max(gn, 0f) - Mathf.Max(g, 0f)) / dist[b + k];
                         }
-                        float di = Vector3.Dot(wind[n], tan[n * 4 + back[b + k]]);
-                        if (di > 0f) inflow += hum[n] * di * adv * waterState.airOutScale[n] * G.Area[n] / G.Area[c];
+                        float di = Vector3.Dot(Vector3.Cross(dirs[n], wind[n]), edge[n * 4 + back[b + k]]);
+                        if (di > 0f) inflow += hum[n] * di * reach * waterState.airOutScale[n] / area[c];
+                        // Brassage par les tourbillons trop petits pour la grille : échange symétrique entre voisins.
+                        mixing += (hum[n] - hum[c]) * Mathf.Min(G.Area[n], G.Area[c]) / G.Area[c];
                     }
-                    float h = hum[c] * (1f - outFrac) + inflow;
+                    float h = hum[c] * (1f - outFrac) + inflow + AirMixing * mixing;
                     if (evap != null) h += evap[c] / rainK;
 
                     float condensation = 0f;
                     if (ocean)
                     {
                         float ice = Mathf.Clamp01((t + 15f) / 10f) * (1f - Mathf.Clamp01(seaIce[c] / SeaIceCap));
-                        float exchange = (sat - h) * 0.05f * ice;
+                        // L'air marin se charge jusqu'à 85 % d'humidité, pas jusqu'à saturation : sans cela tout l'air
+                        // des mers froides est au bord de la condensation et le ciel y reste couvert en permanence.
+                        float deficit = sat * SeaAirHumidity - h;
+                        float exchange = (deficit > 0f ? deficit : Mathf.Min(0f, sat - h)) * 0.05f * ice;
                         if (exchange > 0f)
                         {
                             float evaporated = Mathf.Min(exchange * rainK, water[c]);
@@ -532,21 +585,21 @@ namespace LivingPlanet
                     }
                     else
                     {
-                        float target = sat * 0.7f * moist[c];
+                        float target = sat * (0.4f + 0.5f * moist[c]);
                         if (h < target)
                         {
-                            float evaporated = Mathf.Min((target - h) * 0.012f * rainK, gw[c]);
+                            float evaporated = Mathf.Min((target - h) * LandEvaporation * rainK, gw[c]);
                             gw[c] -= evaporated;
                             h += evaporated / rainK;
                         }
                     }
 
-                    float lift = Mathf.Clamp(slopeAlong * 6f, 0f, 0.5f);
+                    float lift = Mathf.Clamp(slopeAlong * ReliefLift, 0f, MaxReliefLift);
                     float dl = (latA[c] - itczLat) / 0.17f;
                     float conv = 0.25f * Mathf.Exp(-dl * dl);
-                    float effSat = sat * Mathf.Max(0.2f, 1f - lift - conv - 0.35f * frontN[c]);
+                    float effSat = sat * Mathf.Max(0.2f, 1f - lift - conv - 0.5f * frontN[c]);
                     float precip = 0f;
-                    if (h > effSat) { precip = (h - effSat) * 0.25f; h -= precip; }
+                    if (h > effSat) { precip = (h - effSat) * RainOut; h -= precip; }
                     precip += condensation;
                     if (h > 1.2f) { precip += h - 1.2f; h = 1.2f; }
                     if (h < 0f) h = 0f;

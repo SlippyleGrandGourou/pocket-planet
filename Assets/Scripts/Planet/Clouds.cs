@@ -18,7 +18,9 @@ namespace LivingPlanet
                 for (int c = s; c < e; c++)
                 {
                     float sat = Mathf.Max(Sat(temp[c]), 0.05f);
-                    float rh = hum[c] / sat;
+                    // Un air saturé ne suffit pas à couvrir le ciel : au-delà de 80 % d'humidité, ce sont les ascendances
+                    // (dépressions, fronts, relief) qui décident, sinon les mers froides restent sous une bande grise continue.
+                    float rh = Mathf.Min(hum[c] / sat, 0.8f);
                     float g = Mathf.Max(rock[c] + sed[c], 0f);
                     Vector3 w = wind[c];
                     float lift = 0f;
@@ -31,7 +33,7 @@ namespace LivingPlanet
                     }
                     lift = Mathf.Clamp(lift * 6f, 0f, 0.5f);
                     float pr = pres != null ? pres[c] : 0f;
-                    float rhEff = rh + 0.18f * Mathf.Clamp01(-pr) - 0.22f * Mathf.Clamp01(pr) + 0.5f * lift + 0.3f * (frontN[c] - 0.25f);
+                    float rhEff = rh + 0.05f * Mathf.Clamp01(-pr) - 0.12f * Mathf.Clamp01(pr) + 0.5f * lift + 0.8f * (frontN[c] - 0.2f);
                     float tgt = Mathf.Clamp01((rhEff - 0.78f) / 0.22f);
                     tgt = Mathf.Max(tgt, Mathf.Clamp01(rainNow[c] * 60f));
                     tgt = Mathf.Max(tgt, Mathf.Min(1f, ash[c]));

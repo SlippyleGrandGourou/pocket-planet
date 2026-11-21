@@ -579,6 +579,11 @@ namespace LivingPlanet
                     PlanetSave.ReadObject(r, Sim, maxItems, missingFields.ToArray(), ignoreFields.ToArray());
                     // Les anciens anneaux visuels n'ont pas d'état d'onde réutilisable ; l'eau est conservée.
                     if (version < 20) Sim.tsunamis.Clear();
+                    // L'humidité des sols est étalonnée à la génération sur la pluie de l'époque (CalibrateMoisture).
+                    // Depuis la version 21 la pluie entre dans les continents : sur trois planètes de référence, le
+                    // même étalonnage donne une échelle 9 à 18 fois plus petite. Sans cette correction, une ancienne
+                    // planète se couvrirait de sols détrempés.
+                    if (version < 21) Sim.moistScale *= 0.08f;
                     if (version < 12) Sim.MigrateIcebergVolumes();
                     if (version < 4) Sim.MigrateTectonicTimescale();
                     else if (version < 9 && Mathf.Abs(Sim.plateSpeed - 0.2f * Sim.Activity) < 0.0001f)

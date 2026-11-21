@@ -11,7 +11,7 @@ namespace LivingPlanet
     // Format versionné : seules les données de simulation connues sont lues, jamais des types provenant du fichier.
     static class PlanetSave
     {
-        const int Version = 20;
+        const int Version = 21;
         const int Magic = 0x4c505331;
         static readonly Dictionary<Type, FieldInfo[]> fieldCache = new Dictionary<Type, FieldInfo[]>();
         static readonly Type lavaFlow = typeof(PlanetSim).GetNestedType("LavaFlow", BindingFlags.NonPublic);
@@ -135,7 +135,7 @@ namespace LivingPlanet
                 }
                 else if (f.FieldType != typeof(PlanetGrid) && f.FieldType != typeof(PlanetSim) &&
                          f.FieldType != typeof(Ecosystem) && f.FieldType != typeof(EcoFields) &&
-                         f.FieldType != typeof(WaterState) && !typeof(System.Random).IsAssignableFrom(f.FieldType) && !typeof(Delegate).IsAssignableFrom(f.FieldType))
+                         f.FieldType != typeof(WaterState) && f.FieldType != typeof(Continentality) && !typeof(System.Random).IsAssignableFrom(f.FieldType) && !typeof(Delegate).IsAssignableFrom(f.FieldType))
                     throw new InvalidDataException("Type non pris en charge dans la sauvegarde : " + type.Name + "." + f.Name);
             }
             result.Sort((a, b) => string.CompareOrdinal(a.Name, b.Name));

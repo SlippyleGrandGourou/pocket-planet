@@ -838,6 +838,174 @@ public static class FlowValidation
         }
     }
 
+    // ------------------------------------------------------------------ climat
+    // Part de la variance d'un champ expliquée par la latitude seule (bandes de 5°), pondérée par les surfaces :
+    // 1 = des bandes pures qui font le tour de la planète, 0 = aucune organisation en bandes.
+    static double ZonalShare(PlanetSim s, float[] field, bool seaOnly)
+    {
+        const int bands = 36;
+        var sum = new double[bands]; var weight = new double[bands];
+        double total = 0, totalWeight = 0;
+        for (int c = 0; c < s.M; c++)
+        {
+            if (seaOnly && !s.IsOcean(c)) continue;
+            int band = Mathf.Clamp((int)((Mathf.Asin(s.G.Dir[c].y) * Mathf.Rad2Deg + 90f) / 5f), 0, bands - 1);
+            double a = s.G.Area[c];
+            sum[band] += field[c] * a; weight[band] += a;
+            total += field[c] * a; totalWeight += a;
+        }
+        double mean = total / totalWeight, between = 0, variance = 0;
+        for (int c = 0; c < s.M; c++)
+        {
+            if (seaOnly && !s.IsOcean(c)) continue;
+            int band = Mathf.Clamp((int)((Mathf.Asin(s.G.Dir[c].y) * Mathf.Rad2Deg + 90f) / 5f), 0, bands - 1);
+            double a = s.G.Area[c], zonal = sum[band] / weight[band];
+            between += (zonal - mean) * (zonal - mean) * a;
+            variance += (field[c] - mean) * (field[c] - mean) * a;
+        }
+        return variance > 0 ? between / variance : 1d;
+    }
+
+    // Distance à la mer en cellules (0 en mer), par propagation depuis les côtes.
+    static int[] CoastDistance(PlanetSim s)
+    {
+        var distance = new int[s.M];
+        var queue = new System.Collections.Generic.Queue<int>();
+        for (int c = 0; c < s.M; c++)
+            if (s.IsOcean(c)) queue.Enqueue(c); else distance[c] = int.MaxValue;
+        while (queue.Count > 0)
+        {
+            int c = queue.Dequeue();
+            for (int k = 0; k < 4; k++)
+            {
+                int n = s.G.Nbr[c * 4 + k];
+                if (n < 0 || distance[n] <= distance[c] + 1) continue;
+                distance[n] = distance[c] + 1;
+                queue.Enqueue(n);
+            }
+        }
+        return distance;
+    }
+
+    sealed class ClimateSummary
+    {
+        public double pressureZonal, seaCloudZonal, inlandRain, coastRain, warmRain, coldRain;
+        public double InlandShare { get { return inlandRain / Math.Max(coastRain, 1e-9); } }
+        public double WarmShare { get { return warmRain / Math.Max(coldRain, 1e-9); } }
+        public override string ToString()
+        {
+            return "pressure zonal share " + pressureZonal.ToString("F3") + ", sea cloud zonal share " + seaCloudZonal.ToString("F3") +
+                ", inland/coast rain " + InlandShare.ToString("F3") + ", warm/cold season rain " + WarmShare.ToString("F3");
+        }
+    }
+
+    // Planète générée comme en jeu (même taille de cellule que la planète par défaut), mise en régime puis
+    // observée pendant un an : ce que le climat donne à voir, résumé en quatre nombres.
+    static ClimateSummary ObserveClimate(int seed)
+    {
+        var s = new PlanetSim(new PlanetGrid(64, 600f));
+        s.ApplyAge(4.5f);
+        s.MaxHeight *= 2f; s.MountainAmp *= 2f;
+        s.Generate(seed);
+        var random = new System.Random(seed);
+        Action step = () =>
+        {
+            s.StepClimate(); s.StepOcean();
+            if (s.tick % 4 == 0) s.StepClouds();
+            s.StepHydro(); s.StepGroundwater();
+            s.StepIce(random);
+            s.StepCoastline();
+            s.tick++;
+        };
+        s.precipRate = 0.05f;
+        for (int i = 0; i < 250; i++) step();
+        s.CalibrateMoisture();
+        s.precipRate = 0.01f;
+        s.tick = 0;
+        for (int i = 0; i < 3 * PlanetSim.TicksPerYear; i++) step();
+
+        var result = new ClimateSummary();
+        var distance = CoastDistance(s);
+        int samples = 0;
+        double inlandArea = 0, coastArea = 0;
+        for (int i = 0; i < PlanetSim.TicksPerYear; i++)
+        {
+            step();
+            // Été de chaque hémisphère : le soleil est de son côté de l'équateur.
+            bool northSummer = s.Declination > 0f;
+            for (int c = 0; c < s.M; c++)
+            {
+                if (distance[c] == 0) continue;
+                float latitude = Mathf.Asin(s.G.Dir[c].y) * Mathf.Rad2Deg, absLatitude = Mathf.Abs(latitude);
+                if (absLatitude < 25f || absLatitude > 60f) continue;
+                double rain = s.rainNow[c] * (double)s.G.Area[c];
+                if (latitude > 0f == northSummer) result.warmRain += rain; else result.coldRain += rain;
+                if (distance[c] >= 4) { result.inlandRain += rain; inlandArea += s.G.Area[c]; }
+                else if (distance[c] <= 2) { result.coastRain += rain; coastArea += s.G.Area[c]; }
+            }
+            if (s.tick % 5 != 0) continue;
+            result.pressureZonal += ZonalShare(s, s.pres, false);
+            result.seaCloudZonal += ZonalShare(s, s.cloud, true);
+            samples++;
+        }
+        Check(inlandArea > 0 && coastArea > 0, "Climate test planet has no mid-latitude interior (seed " + seed + ")");
+        result.pressureZonal /= samples; result.seaCloudZonal /= samples;
+        result.inlandRain /= inlandArea; result.coastRain /= coastArea;
+        return result;
+    }
+
+    // Le temps qu'il fait ne doit pas se réduire à trois bandes de nuages et de pluie collées aux parallèles et
+    // aux côtes : la pression doit porter des centres d'action (pas seulement des ceintures), les nuages en mer
+    // ne doivent pas recopier ces ceintures, la pluie doit entrer dans les continents et tomber aussi en été.
+    static void ClimateIsNotBanded()
+    {
+        var seeds = new[] { 4242, 777 };
+        var observed = new ClimateSummary[seeds.Length];
+        for (int i = 0; i < seeds.Length; i++)
+        {
+            observed[i] = ObserveClimate(seeds[i]);
+            Debug.Log("Climate, seed " + seeds[i] + ": " + observed[i]);
+        }
+        for (int i = 0; i < seeds.Length; i++)
+        {
+            int seed = seeds[i];
+            ClimateSummary climate = observed[i];
+            Check(climate.pressureZonal < 0.65, "Pressure is only latitude belts (seed " + seed + "): " + climate);
+            Check(climate.seaCloudZonal < 0.5, "Clouds over the sea are only latitude belts (seed " + seed + "): " + climate);
+            Check(climate.InlandShare > 0.3, "Rain does not reach the interior of continents (seed " + seed + "): " + climate);
+            Check(climate.WarmShare > 0.65, "Mid-latitude land gets its rain in winter only (seed " + seed + "): " + climate);
+        }
+    }
+
+    // Une sauvegarde d'avant l'ajout de dépressions n'en contient que quatorze : le vent doit repartir avec le
+    // nombre actuel au lieu de lire au-delà des tableaux restaurés.
+    static void OldPressureSystemsAreReplaced()
+    {
+        var s = new PlanetSim(new PlanetGrid(12, 56.25f));
+        s.ApplyAge(4.5f);
+        s.Generate(123);
+        var type = typeof(PlanetSim);
+        int current = ((Vector3[])type.GetField("pressDir", Private).GetValue(s)).Length;
+        const int saved = 14;
+        Check(current != saved, "Test no longer represents an old save: " + current + " pressure systems");
+        type.GetField("pressDir", Private).SetValue(s, new Vector3[saved]);
+        foreach (string name in new[] { "pressAmp", "pressSgn", "pressRad", "pressBase" })
+            type.GetField(name, Private).SetValue(s, new float[saved]);
+        foreach (string name in new[] { "pressAge", "pressLife" })
+            type.GetField(name, Private).SetValue(s, new int[saved]);
+        for (int i = 0; i < 10; i++) { s.StepClimate(); s.tick++; }
+        Check(((Vector3[])type.GetField("pressDir", Private).GetValue(s)).Length == current, "Old pressure systems were kept");
+        for (int c = 0; c < s.M; c++)
+            Check(!float.IsNaN(s.pres[c]) && !float.IsNaN(s.wind[c].x), "Wind is invalid after resuming an old save");
+    }
+
+    public static void RunClimate()
+    {
+        OldPressureSystemsAreReplaced();
+        ClimateIsNotBanded();
+        Debug.Log("CLIMATE VALIDATION PASSED");
+    }
+
     public static void RunDrainage()
     {
         DeepChannelCarriesItsFlow();
@@ -878,6 +1046,8 @@ public static class FlowValidation
         DeepChannelCarriesItsFlow();
         DeepWaterComesToRest();
         GeneratedLandDrains();
+        OldPressureSystemsAreReplaced();
+        ClimateIsNotBanded();
         Debug.Log("FLOW VALIDATION PASSED");
     }
 }

@@ -577,6 +577,9 @@ namespace LivingPlanet
             var mat = new Material(shader);
             mat.SetColor("_BaseColor", Color.white);
             MakeTransparent(mat, true);
+            // Après les nuages (Transparent+10), qui écrivent leur profondeur : sinon ils recouvrent la pluie
+            // qui tombe devant eux.
+            mat.renderQueue = (int)RenderQueue.Transparent + 20;
             precipR.sharedMaterial = mat;
             precipR.renderMode = ParticleSystemRenderMode.Stretch;
             precipR.lengthScale = 2.5f;

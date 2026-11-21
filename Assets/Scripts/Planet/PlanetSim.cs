@@ -496,6 +496,12 @@ namespace LivingPlanet
             });
         }
 
+        // Pluie à l'intérieur des terres : l'air marin ne doit pas tout lâcher sur la première pente. Le relief
+        // soulève moins brutalement, l'excès d'humidité tombe en plusieurs cellules au lieu d'une seule, les sols
+        // humides rendent leur eau à l'air qui passe, et l'air se brasse d'une cellule à l'autre.
+        const float SeaAirHumidity = 0.85f;
+        const float ReliefLift = 3f, MaxReliefLift = 0.4f, RainOut = 0.12f, LandEvaporation = 0.03f, AirMixing = 0.04f;
+
         public void StepClimate()
         {
             if (tick % 5 == 0) UpdateWind();
@@ -505,6 +511,12 @@ namespace LivingPlanet
             float rate = precipRate;
             float mScale = moistScale;
             var nbr = G.Nbr; var back = G.Back; var tan = G.Tan; var dist = G.Dist;
+            // L'air sort d'une cellule par ses arêtes, en proportion du vent qui les traverse (EdgeFlux : arête
+            // orientée vers l'extérieur). Compter le vent vers le centre des voisines créait une convergence
+            // fictive le long des bords de face du cube, où les lignes de la grille font un angle : il y pleuvait
+            // deux à trois fois trop, en lignes visibles.
+            var dirs = G.Dir; var edge = G.EdgeFlux; var area = G.Area;
+            float reach = adv * G.CellSize * G.Radius;
 
             Par.For(M, (s, e) =>
             {
@@ -512,9 +524,10 @@ namespace LivingPlanet
                 {
                     float outgoing = 0f;
                     int b = c * 4;
+                    Vector3 turn = Vector3.Cross(dirs[c], wind[c]);
                     for (int k = 0; k < 4; k++)
                         if (nbr[b + k] >= 0)
-                            outgoing += Mathf.Max(0f, Vector3.Dot(wind[c], tan[b + k])) * adv;
+                            outgoing += Mathf.Max(0f, Vector3.Dot(turn, edge[b + k])) * reach / area[c];
                     waterState.airOutScale[c] = outgoing > 1f ? 1f / outgoing : 1f;
                 }
             });
@@ -533,29 +546,35 @@ namespace LivingPlanet
                     float sat = Sat(t);
 
                     Vector3 wc = wind[c];
-                    float outFrac = 0f, inflow = 0f, slopeAlong = 0f;
+                    Vector3 turn = Vector3.Cross(dirs[c], wc);
+                    float outFrac = 0f, inflow = 0f, slopeAlong = 0f, mixing = 0f;
                     for (int k = 0; k < 4; k++)
                     {
                         int n = nbr[b + k];
                         if (n < 0) continue;
                         float dd = Vector3.Dot(wc, tan[b + k]);
+                        outFrac += Mathf.Max(0f, Vector3.Dot(turn, edge[b + k])) * reach / area[c] * waterState.airOutScale[c];
                         if (dd > 0f)
                         {
-                            outFrac += dd * adv * waterState.airOutScale[c];
                             float gn = rock[n] + sed[n];
                             slopeAlong += dd * (Mathf.Max(gn, 0f) - Mathf.Max(g, 0f)) / dist[b + k];
                         }
-                        float di = Vector3.Dot(wind[n], tan[n * 4 + back[b + k]]);
-                        if (di > 0f) inflow += hum[n] * di * adv * waterState.airOutScale[n] * G.Area[n] / G.Area[c];
+                        float di = Vector3.Dot(Vector3.Cross(dirs[n], wind[n]), edge[n * 4 + back[b + k]]);
+                        if (di > 0f) inflow += hum[n] * di * reach * waterState.airOutScale[n] / area[c];
+                        // Brassage par les tourbillons trop petits pour la grille : échange symétrique entre voisins.
+                        mixing += (hum[n] - hum[c]) * Mathf.Min(G.Area[n], G.Area[c]) / G.Area[c];
                     }
-                    float h = hum[c] * (1f - outFrac) + inflow;
+                    float h = hum[c] * (1f - outFrac) + inflow + AirMixing * mixing;
                     if (evap != null) h += evap[c] / rainK;
 
                     float condensation = 0f;
                     if (ocean)
                     {
                         float ice = Mathf.Clamp01((t + 15f) / 10f) * (1f - Mathf.Clamp01(seaIce[c] / SeaIceCap));
-                        float exchange = (sat - h) * 0.05f * ice;
+                        // L'air marin se charge jusqu'à 85 % d'humidité, pas jusqu'à saturation : sans cela tout l'air
+                        // des mers froides est au bord de la condensation et le ciel y reste couvert en permanence.
+                        float deficit = sat * SeaAirHumidity - h;
+                        float exchange = (deficit > 0f ? deficit : Mathf.Min(0f, sat - h)) * 0.05f * ice;
                         if (exchange > 0f)
                         {
                             float evaporated = Mathf.Min(exchange * rainK, water[c]);
@@ -566,21 +585,21 @@ namespace LivingPlanet
                     }
                     else
                     {
-                        float target = sat * 0.7f * moist[c];
+                        float target = sat * (0.4f + 0.5f * moist[c]);
                         if (h < target)
                         {
-                            float evaporated = Mathf.Min((target - h) * 0.012f * rainK, gw[c]);
+                            float evaporated = Mathf.Min((target - h) * LandEvaporation * rainK, gw[c]);
                             gw[c] -= evaporated;
                             h += evaporated / rainK;
                         }
                     }
 
-                    float lift = Mathf.Clamp(slopeAlong * 6f, 0f, 0.5f);
+                    float lift = Mathf.Clamp(slopeAlong * ReliefLift, 0f, MaxReliefLift);
                     float dl = (latA[c] - itczLat) / 0.17f;
                     float conv = 0.25f * Mathf.Exp(-dl * dl);
-                    float effSat = sat * Mathf.Max(0.2f, 1f - lift - conv - 0.35f * frontN[c]);
+                    float effSat = sat * Mathf.Max(0.2f, 1f - lift - conv - 0.5f * frontN[c]);
                     float precip = 0f;
-                    if (h > effSat) { precip = (h - effSat) * 0.25f; h -= precip; }
+                    if (h > effSat) { precip = (h - effSat) * RainOut; h -= precip; }
                     precip += condensation;
                     if (h > 1.2f) { precip += h - 1.2f; h = 1.2f; }
                     if (h < 0f) h = 0f;

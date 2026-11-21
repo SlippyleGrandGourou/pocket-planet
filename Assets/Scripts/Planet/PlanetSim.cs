@@ -137,7 +137,6 @@ namespace LivingPlanet
             humN = new float[M]; outTot = new float[M];
             waterErode = new float[M]; windErode = new float[M];
             outW = new float[M * 4]; outS = new float[M * 4]; thOut = new float[M * 4];
-            tsunamiBase = new float[M]; tsunamiMomentum = new float[M * 4]; tsunamiActive = new byte[M];
             subductionLayers = new float[M * SubductionLayerCount];
             subductionLayersN = new float[M * SubductionLayerCount];
             wind = new Vector3[M];
@@ -567,7 +566,6 @@ namespace LivingPlanet
         {
             var nbr = G.Nbr; var back = G.Back; var dist = G.Dist;
             float kf = kFlow;
-            bool tsunamiRunning = tsunamis.Count > 0;
             if (evap == null) evap = new float[M];
 
             Par.For(M, (s, e) =>
@@ -611,9 +609,6 @@ namespace LivingPlanet
                             bool oceanPair = rock[c] + sed[c] < SeaLevel && rock[n] + sed[n] < SeaLevel;
                             if (current != null && oceanPair && water[n] > 0f)
                                 o += Mathf.Max(0f, Vector3.Dot(current[c], G.Tan[b + k])) * Mathf.Min(w, 1f) * 0.02f;
-                            // L'onde possède sa propre inertie : additionner les deux débits inertiels
-                            // sur une même arête amplifie les oscillations en avance rapide.
-                            bool waveEdge = tsunamiRunning && (tsunamiActive[c] != 0 || tsunamiActive[n] != 0);
                             // Le frottement du fond freine d'autant moins le courant que la section mouillée est
                             // profonde : une lame mince s'arrête dès que la pente s'annule, un chenal profond garde son
                             // élan et débite donc bien plus pour le même écart de niveau. Sans cela, un fleuve ou un
@@ -622,7 +617,7 @@ namespace LivingPlanet
                             float section = S - Mathf.Max(rock[c] + sed[c], rock[n] + sed[n]);
                             float momentum = Mathf.Lerp(ShallowMomentum, DeepMomentum, Mathf.Clamp01(section / DeepFlowDepth));
                             o = dz > 0f || oceanPair || section > 0f
-                                ? Mathf.Max(0f, (waveEdge ? 0f : momentum) * outW[b + k] + 0.35f * o) : 0f;
+                                ? Mathf.Max(0f, momentum * outW[b + k] + 0.35f * o) : 0f;
                         }
                         outW[b + k] = o;
                         total += o;

@@ -167,48 +167,60 @@ public static class FlowValidation
                 }
             }
         int source = g.CellIndex(0, 10, 16);
+        int offshore = g.CellIndex(0, 13, 16);
         int coast = g.CellIndex(0, 16, 16);
         int behindWall = g.CellIndex(0, 20, 16);
         int isolated = g.CellIndex(1, 16, 16);
         s.water[isolated] = 2f; s.susp[isolated] = 0.4f;
+        var water0 = (float[])s.water.Clone();
+        var ground0 = new float[s.M];
+        for (int c = 0; c < s.M; c++) ground0[c] = s.Ground(c);
         double water = Weighted(s, s.water);
         double salt = Weighted(s, s.waterState.salt);
         double sediment = Weighted(s, s.rock, s.sed, s.susp);
         double movableSediment = Weighted(s, s.sed, s.susp);
-        s.SpawnTsunami(source, 7f);
-        Check(s.tsunamis.Count == 1 && s.water[source] > 10f, "Tsunami did not lift the water at its source");
-        Check(s.TsunamiElevation(source) > 0f && s.TsunamiElevation(isolated) == 0f,
-            "Tsunami visualization did not follow the simulated water elevation");
-        Near(water, Weighted(s, s.water), "Tsunami source water");
-        Near(salt, Weighted(s, s.waterState.salt), "Tsunami source salt");
-        float peak = 0f, lateMinimum = float.MaxValue, minSoil = s.sed[coast], maxSuspension = 0f;
-        bool sedimentRetreated = false;
-        for (int i = 0; i < 500; i++)
+        Check(s.SpawnTsunami(source, 7f) && s.tsunamis.Count == 1, "Tsunami did not start");
+        for (int c = 0; c < s.M; c++)
+            Check(s.water[c] == water0[c], "Tsunami birth moved water at cell " + c);
+        Check(s.TsunamiElevation(source) > 0f && s.TsunamiElevation(isolated) == 0f && s.TsunamiElevation(coast) == 0f,
+            "Tsunami crest is not limited to the sea around its source");
+        float crest = 0f, peak = 0f, minSoil = s.sed[coast], maxSuspension = 0f;
+        bool resumed = false;
+        int steps = 0;
+        while (s.tsunamis.Count > 0)
         {
+            Check(++steps < 3000, "Tsunami never ended");
             s.StepTsunamis(0.1f);
+            crest = Mathf.Max(crest, s.TsunamiElevation(offshore));
             peak = Mathf.Max(peak, s.water[coast]);
             minSoil = Mathf.Min(minSoil, s.sed[coast]);
             maxSuspension = Mathf.Max(maxSuspension, s.susp[coast]);
-            int seaEdge = coast * 4;
-            if (s.water[coast] < peak * 0.9f && s.susp[coast] > 0f &&
-                Vector3.Dot(s.TsunamiFlow(coast), g.Tan[seaEdge]) > 0.01f) sedimentRetreated = true;
-            if (i > 300) lateMinimum = Mathf.Min(lateMinimum, s.water[coast]);
+            Check(s.water[behindWall] < 0.001f, "Tsunami crossed an impermeable ridge");
+            Check(s.water[isolated] == 2f && s.susp[isolated] == 0.4f, "Tsunami disturbed an isolated lake");
+            if (!resumed && s.water[coast] > 1f) { TsunamiSaveContinuation(s); resumed = true; }
         }
+        Check(crest > 1f, "Tsunami crest was not visible at sea: " + crest);
         Check(peak > 1f, "Tsunami did not produce a visible coastal runup: " + peak);
-        Check(lateMinimum < peak * 0.8f, "Tsunami water did not retreat: " + peak + " -> " + lateMinimum);
-        Check(s.water[behindWall] < 0.001f, "Tsunami crossed an impermeable ridge");
-        Check(s.water[isolated] == 2f && s.susp[isolated] == 0.4f,
-            "Tsunami disturbed an isolated lake");
+        Check(resumed, "Tsunami save continuation was not exercised");
         Check(minSoil < 0.2f && maxSuspension > 0f,
             "Tsunami did not erode and carry coastal sediment: " + minSoil + ", " + maxSuspension);
-        Check(sedimentRetreated, "Retreating tsunami did not carry sediment toward the sea");
+        double carried = 0d;
+        for (int c = 0; c < s.M; c++)
+        {
+            Check(Mathf.Abs(s.water[c] - water0[c]) < 0.001f,
+                "Tsunami left water displaced at cell " + c + ": " + water0[c] + " -> " + s.water[c]);
+            Check(s.TsunamiElevation(c) == 0f, "Tsunami crest outlived the tsunami at cell " + c);
+            if (water0[c] < 5f) continue;
+            Check(s.Ground(c) == ground0[c], "Tsunami reshaped the sea bed at cell " + c);
+            carried += s.susp[c];
+        }
+        Check(carried > 0d, "Retreating tsunami did not carry sediment to the sea");
         Near(water, Weighted(s, s.water), "Area-weighted tsunami water");
         Near(salt, Weighted(s, s.waterState.salt), "Area-weighted tsunami salt");
         double sedimentError = Math.Abs(sediment - Weighted(s, s.rock, s.sed, s.susp));
         Check(sedimentError < Math.Max(0.001, movableSediment * 0.0001),
             "Tsunami sediment balance error: " + sedimentError);
-        Debug.Log("Tsunami coastal peak " + peak + ", retreat " + lateMinimum);
-        TsunamiSaveContinuation(s);
+        Debug.Log("Tsunami sea crest " + crest + ", coastal peak " + peak + ", ended after " + steps * 0.1f + " s");
 
         var separated = new PlanetSim(g);
         for (int c = 0; c < separated.M; c++) separated.rock[c] = 30f;
@@ -221,7 +233,61 @@ public static class FlowValidation
         int isolatedSea = g.CellIndex(0, 12, 16);
         separated.rock[isolatedSea] = -10f; separated.water[isolatedSea] = 10f;
         Check(separated.SpawnTsunami(source, 7f), "Tsunami failed to start in a connected sea");
-        Check(separated.water[isolatedSea] == 10f, "Tsunami source transferred water across land");
+        while (separated.tsunamis.Count > 0)
+        {
+            separated.StepTsunamis(0.1f);
+            Check(separated.water[isolatedSea] == 10f && separated.TsunamiElevation(isolatedSea) == 0f,
+                "Tsunami reached a sea it is not connected to");
+        }
+    }
+
+    // En pleine mer, le front est un cercle autour de l'épicentre, y compris à cheval sur un coin du cube.
+    static void TsunamiRoundFront()
+    {
+        var g = new PlanetGrid(48, 150f);
+        var s = new PlanetSim(g);
+        for (int c = 0; c < s.M; c++) { s.rock[c] = -10f; s.water[c] = 10f; }
+        int source = g.CellIndex(0, 1, 1);
+        Check(s.SpawnTsunami(source, 10f), "Could not start round-front tsunami");
+        var wave = s.tsunamis[0];
+        while (wave.ang < 0.6f) s.StepTsunamis(0.1f);
+        float cell = g.CellSize / g.Radius;
+        for (int c = 0; c < s.M; c++)
+        {
+            float distance = Vector3.Angle(g.Dir[source], g.Dir[c]) * Mathf.Deg2Rad;
+            float height = s.TsunamiElevation(c);
+            if (distance > wave.ang + cell)
+                Check(height == 0f, "Tsunami crest ahead of its front at cell " + c);
+            if (distance < wave.ang - 0.03f && distance > wave.ang - wave.width * 0.5f)
+                Check(height > 0f, "Tsunami front is dented at cell " + c + ", distance " + distance);
+        }
+    }
+
+    // Un impact en mer creuse le fond sous l'eau : la mer comble ce creux à la naissance de l'onde, sans
+    // créer ni perdre d'eau ou de sel.
+    static void TsunamiFillsImpactHollow()
+    {
+        var g = new PlanetGrid(32, 150f);
+        var s = new PlanetSim(g);
+        for (int c = 0; c < s.M; c++) { s.rock[c] = -20f; s.water[c] = 20f; s.waterState.salt[c] = 20f * PlanetSim.OceanSalinity; }
+        int source = g.CellIndex(0, 16, 16);
+        for (int j = 14; j <= 18; j++)
+            for (int i = 14; i <= 18; i++) s.rock[g.CellIndex(0, i, j)] = -32f;
+        double water = Weighted(s, s.water);
+        double salt = Weighted(s, s.waterState.salt);
+        Check(s.SpawnTsunami(source, 9f), "Could not start impact tsunami");
+        for (int j = 14; j <= 18; j++)
+            for (int i = 14; i <= 18; i++)
+            {
+                int c = g.CellIndex(0, i, j);
+                Check(Mathf.Abs(s.Ground(c) + s.water[c] - s.SeaLevel) < 0.01f,
+                    "Impact hollow was not filled at cell " + c + ": " + (s.Ground(c) + s.water[c]));
+            }
+        float lowest = 0f;
+        for (int c = 0; c < s.M; c++) lowest = Mathf.Min(lowest, s.Ground(c) + s.water[c] - s.SeaLevel);
+        Check(lowest > -0.5f, "Filling the impact hollow dug the sea elsewhere: " + lowest);
+        Near(water, Weighted(s, s.water), "Impact hollow water");
+        Near(salt, Weighted(s, s.waterState.salt), "Impact hollow salt");
     }
 
     static void TsunamiSaveContinuation(PlanetSim s)
@@ -249,29 +315,56 @@ public static class FlowValidation
         for (int c = 0; c < s.M; c++)
             Check(Mathf.Abs(s.water[c] - copy.water[c]) < 0.00001f &&
                 Mathf.Abs(s.susp[c] - copy.susp[c]) < 0.00001f &&
-                Mathf.Abs(s.waterState.salt[c] - copy.waterState.salt[c]) < 0.00001f,
+                Mathf.Abs(s.waterState.salt[c] - copy.waterState.salt[c]) < 0.00001f &&
+                Mathf.Abs(s.TsunamiElevation(c) - copy.TsunamiElevation(c)) < 0.00001f,
                 "Active tsunami diverged after saving at cell " + c);
 
-        string[] missing = { "tsunamiBase", "tsunamiMomentum", "tsunamiActive", "tsunamiAccum" };
-        var fields = (FieldInfo[])save.GetMethod("Fields", BindingFlags.Static | BindingFlags.NonPublic)
-            .Invoke(null, new object[] { typeof(PlanetSim) });
+        // Flux au format de la version 20 : les quatre champs du solveur retiré en plus, et des tsunamis
+        // sans les champs ajoutés depuis. Il doit toujours se charger.
+        var fieldsOf = save.GetMethod("Fields", BindingFlags.Static | BindingFlags.NonPublic);
+        var fields = (FieldInfo[])fieldsOf.Invoke(null, new object[] { typeof(PlanetSim) });
+        var waveFields = (FieldInfo[])fieldsOf.Invoke(null, new object[] { typeof(Tsunami) });
+        string[] added = { "donor", "held" };
         var writeValue = save.GetMethod("WriteValue", BindingFlags.Static | BindingFlags.NonPublic);
+        var legacy = new PlanetSim(s.G);
         using (var stream = new MemoryStream())
         {
             using (var writer = new BinaryWriter(stream, System.Text.Encoding.UTF8, true))
             {
-                writer.Write(fields.Length - missing.Length);
+                writer.Write(fields.Length + 4);
                 foreach (var field in fields)
                 {
-                    if (Array.IndexOf(missing, field.Name) >= 0) continue;
                     writer.Write(field.Name);
-                    writeValue.Invoke(null, new object[] { writer, field.FieldType, field.GetValue(s) });
+                    if (field.Name != "tsunamis")
+                    {
+                        writeValue.Invoke(null, new object[] { writer, field.FieldType, field.GetValue(s) });
+                        continue;
+                    }
+                    writer.Write(true);
+                    writer.Write(s.tsunamis.Count);
+                    foreach (var wave in s.tsunamis)
+                    {
+                        writer.Write(true);
+                        writer.Write(waveFields.Length - added.Length);
+                        foreach (var waveField in waveFields)
+                        {
+                            if (Array.IndexOf(added, waveField.Name) >= 0) continue;
+                            writer.Write(waveField.Name);
+                            writeValue.Invoke(null, new object[] { writer, waveField.FieldType, waveField.GetValue(wave) });
+                        }
+                    }
                 }
+                writer.Write("tsunamiBase"); writeValue.Invoke(null, new object[] { writer, typeof(float[]), new float[s.M] });
+                writer.Write("tsunamiMomentum"); writeValue.Invoke(null, new object[] { writer, typeof(float[]), new float[s.M * 4] });
+                writer.Write("tsunamiActive"); writeValue.Invoke(null, new object[] { writer, typeof(byte[]), new byte[s.M] });
+                writer.Write("tsunamiAccum"); writeValue.Invoke(null, new object[] { writer, typeof(float), 0.05f });
             }
             stream.Position = 0;
             using (var reader = new BinaryReader(stream))
-                read.Invoke(null, new object[] { reader, new PlanetSim(s.G), s.M * 8 + 1024, missing, null });
+                read.Invoke(null, new object[] { reader, legacy, s.M * 8 + 1024, null, null });
         }
+        Check(legacy.tsunamis.Count == s.tsunamis.Count, "Version 20 tsunami list was not read");
+        legacy.StepTsunamis(0.1f);
     }
 
     static void TsunamiHydroStability()
@@ -849,6 +942,8 @@ public static class FlowValidation
     public static void RunTsunami()
     {
         TsunamiRunup();
+        TsunamiRoundFront();
+        TsunamiFillsImpactHollow();
         TsunamiHydroStability();
         Debug.Log("TSUNAMI VALIDATION PASSED");
     }
@@ -860,6 +955,8 @@ public static class FlowValidation
         SedimentTransport(true, true);
         AreaWeightedTransfers();
         TsunamiRunup();
+        TsunamiRoundFront();
+        TsunamiFillsImpactHollow();
         TsunamiHydroStability();
         CoastlineWaterLevel();
         SpeedIndependentPhysics();

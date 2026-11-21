@@ -11,7 +11,7 @@ namespace LivingPlanet
     // Format versionné : seules les données de simulation connues sont lues, jamais des types provenant du fichier.
     static class PlanetSave
     {
-        const int Version = 20;
+        const int Version = 21;
         const int Magic = 0x4c505331;
         static readonly Dictionary<Type, FieldInfo[]> fieldCache = new Dictionary<Type, FieldInfo[]>();
         static readonly Type lavaFlow = typeof(PlanetSim).GetNestedType("LavaFlow", BindingFlags.NonPublic);
@@ -127,7 +127,8 @@ namespace LivingPlanet
                 // Couches visuelles d'érosion (voir ColorCell ViewMode 10/11) : simple moyenne mobile diagnostique
                 // reconstruite en quelques dizaines de pas, pas besoin d'être persistée (même traitement qu'aeolian).
                 if (type == typeof(PlanetSim) && (f.Name == "waterErode" || f.Name == "windErode")) continue;
-                if (type == typeof(PlanetSim) && (f.Name == "tsunamiOut" || f.Name == "tsunamiActiveN")) continue;
+                // Distance par mer d'un tsunami : recalculée depuis son épicentre (voir Hazards.cs/SeaReach).
+                if (type == typeof(Tsunami) && f.Name == "reach") continue;
                 if (type == typeof(WaterState) && (f.Name == "nextSalt" || f.Name == "outSalt" || f.Name == "airOutScale")) continue;
                 if (DataType(f.FieldType))
                 {
@@ -270,12 +271,31 @@ namespace LivingPlanet
             WriteObject(w, value);
         }
 
+        // Champs retirés du jeu, avec le type sous lequel les anciennes versions les écrivaient : une sauvegarde
+        // qui les contient encore se charge, leur valeur est lue puis jetée.
+        static readonly Dictionary<Type, Dictionary<string, Type>> retiredFields = new Dictionary<Type, Dictionary<string, Type>>
+        {
+            // Solveur d'onde des tsunamis de la version 20.
+            { typeof(PlanetSim), new Dictionary<string, Type> {
+                { "tsunamiBase", typeof(float[]) }, { "tsunamiMomentum", typeof(float[]) },
+                { "tsunamiActive", typeof(byte[]) }, { "tsunamiAccum", typeof(float) } } },
+        };
+
+        // Champs ajoutés à un type écrit à l'intérieur d'un autre (élément de liste) : ReadValue ne connaît pas la
+        // version de la sauvegarde, donc ces champs peuvent toujours manquer et gardent alors leur valeur initiale.
+        static readonly Dictionary<Type, string[]> addedFields = new Dictionary<Type, string[]>
+        {
+            { typeof(Tsunami), new[] { "donor", "held" } }, // version 21
+        };
+
         public static void ReadObject(BinaryReader reader, object value, int maxItems, string[] allowMissingFields = null, string[] ignoreFields = null)
         {
             var fields = Fields(value.GetType());
             int count = reader.ReadInt32();
             int allowedMissing = allowMissingFields != null ? allowMissingFields.Length : 0;
-            if (count > fields.Length || count < fields.Length - allowedMissing)
+            Dictionary<string, Type> retired;
+            retiredFields.TryGetValue(value.GetType(), out retired);
+            if (count > fields.Length + (retired != null ? retired.Count : 0) || count < fields.Length - allowedMissing)
                 throw new InvalidDataException("La structure de la sauvegarde ne correspond pas à cette version.");
             var byName = new Dictionary<string, FieldInfo>(fields.Length);
             foreach (var field in fields) byName.Add(field.Name, field);
@@ -284,6 +304,12 @@ namespace LivingPlanet
             {
                 string name = reader.ReadString();
                 FieldInfo field;
+                Type retiredType;
+                if (retired != null && retired.TryGetValue(name, out retiredType) && seen.Add(name))
+                {
+                    ReadValue(reader, retiredType, maxItems);
+                    continue;
+                }
                 if (!byName.TryGetValue(name, out field) || !seen.Add(name))
                     throw new InvalidDataException("Champ de sauvegarde inattendu : " + name);
                 object loaded = ReadValue(reader, field.FieldType, maxItems);
@@ -357,7 +383,9 @@ namespace LivingPlanet
                 return list;
             }
             object instance = Activator.CreateInstance(type, true);
-            ReadObject(r, instance, maxItems);
+            string[] added;
+            addedFields.TryGetValue(type, out added);
+            ReadObject(r, instance, maxItems, added);
             return instance;
         }
 

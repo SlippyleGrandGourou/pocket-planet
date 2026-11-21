@@ -80,14 +80,16 @@ namespace LivingPlanet
                     {
                         int c = G.VertCells[gi * 4 + k];
                         if (c < 0 || !ShowsWater(c)) continue;
-                        // Moyenne des surfaces mouillées pour éviter les pics aux jonctions terre/mer.
-                        heightSum += S.Ground(c) + S.water[c];
+                        // Moyenne des surfaces mouillées pour éviter les pics aux jonctions terre/mer. La crête
+                        // d'un tsunami ne déplace pas d'eau en mer : elle s'ajoute ici à la surface.
+                        float crest = S.TsunamiElevation(c);
+                        heightSum += S.Ground(c) + S.water[c] + crest;
                         Vector3 cellFlow = Vector3.zero;
                         if (S.IsOcean(c) && S.current != null) cellFlow += S.current[c];
                         else for (int edge = 0; edge < 4; edge++) cellFlow += S.outW[c * 4 + edge] * G.Tan[c * 4 + edge];
                         Vector3 surge = S.TsunamiFlow(c);
                         cellFlow += surge;
-                        surgeHeight += S.TsunamiElevation(c);
+                        surgeHeight += crest;
                         turbulence += Mathf.Clamp01(surge.magnitude * 0.12f) * Mathf.Clamp01(1f - S.water[c] / 12f);
                         speed += Mathf.Clamp01(cellFlow.magnitude);
                         sediment += Mathf.Clamp01(S.susp[c] / Mathf.Max(S.water[c], 0.01f));

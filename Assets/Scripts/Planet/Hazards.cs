@@ -10,11 +10,20 @@ namespace LivingPlanet
     public sealed class Tsunami
     {
         public Vector3 epi;
-        // ang sert désormais d'âge en secondes ; les autres champs restent pour lire les anciennes sauvegardes.
-        public float ang = 0.06f, amp0, speed = 0.035f, width = 0.045f;
+        // Front d'onde : rayon angulaire atteint par la crête (rad), amplitude à la source, vitesse (rad/s)
+        // et longueur de la traîne (rad).
+        public float ang, amp0, speed, width;
+        // Terres que la crête peut mouiller. Pour chacune : sa cellule, la distance (rad) à laquelle le front
+        // l'atteint et l'épaisseur d'eau qui lui est prêtée en ce moment.
         public int[] coast;
         public float[] coastAng;
-        public int next;
+        public float[] held;
+        // Cellules de mer profonde qui prêtent cette eau, à parts égales.
+        public int[] donor;
+        public int next; // inutilisé : reste pour lire les anciennes sauvegardes
+        // Distance par mer (rad) de l'épicentre à chaque cellule, négative hors d'atteinte. Non sauvegardée
+        // (voir PlanetSave.FieldsLocked) : elle se recalcule depuis l'épicentre.
+        public float[] reach;
     }
 
     // Fissure magmatique ouverte par un séisme, le long de la faille mais à l'écart de l'épicentre : visible
@@ -38,9 +47,6 @@ namespace LivingPlanet
         float quakeBoost;
 
         public readonly List<Tsunami> tsunamis = new List<Tsunami>();
-        float[] tsunamiBase, tsunamiMomentum, tsunamiOut;
-        byte[] tsunamiActive, tsunamiActiveN;
-        float tsunamiAccum;
         public readonly List<QuakeEvent> newQuakes = new List<QuakeEvent>();
         public readonly List<EventMsg> events = new List<EventMsg>();
         readonly List<Fissure> fissures = new List<Fissure>(8);
@@ -456,12 +462,27 @@ namespace LivingPlanet
         }
 
         // ------------------------------------------------------------ tsunamis
+        // Un tsunami est un front qui s'éloigne de son épicentre. En mer il ne déplace pas d'eau : sa crête est
+        // une hauteur calculée, ajoutée à la surface par le rendu. Sur les côtes basses il prête de l'eau de
+        // mer aux terres le temps de son passage, puis la reprend.
+        const float TsunamiSpeed = 0.02f;      // avance du front, en radians par seconde
+        const float TsunamiRise = 0.02f;       // largeur de la montée de la crête, en radians
+        const float TsunamiTail = 0.06f;       // longueur de la traîne derrière la crête, en radians
+        const float TsunamiRange = 0.12f;      // portée en radians par unité d'amplitude : l'onde s'y éteint
+        const float TsunamiCrest = 0.63f;      // hauteur de la crête à la source, par unité d'amplitude
+        const float TsunamiPush = 3f;          // poussée transmise au rendu (écume) par unité de hauteur
+        const float TsunamiInland = 45f;       // distance maximale inondée depuis le rivage
+        const float TsunamiDonorDepth = 8f;    // profondeur à partir de laquelle la mer prête son eau
+        const int TsunamiDonors = 1024;        // nombre maximal de cellules de mer qui prêtent leur eau
+        // Rapport maximal entre le plus court chemin de cellule en cellule et la distance à vol d'oiseau en
+        // mer ouverte (FlowValidation.TsunamiRoundFront le vérifie) : en dessous, le front reste un cercle.
+        const float TsunamiDetour = 1.2f;
+
         public bool SpawnTsunami(int c, float amp)
         {
             if (tsunamis.Count >= 3) { Log("Tsunami impossible : trois tsunamis sont déjà actifs.", c); return false; }
             if (amp <= 0f) { Log("Tsunami impossible : amplitude insuffisante.", c); return false; }
-            int radius = Mathf.Max(3, Mathf.RoundToInt(G.N * 0.025f));
-            Region(c, radius * 2 + 2);
+            Region(c, Mathf.Max(3, Mathf.RoundToInt(G.N * 0.025f)) * 2 + 2);
             int source = -1;
             float nearest = float.MaxValue;
             for (int i = 0; i < regionA.Count; i++)
@@ -478,61 +499,11 @@ namespace LivingPlanet
                 Log("Tsunami impossible : aucune mer proche.", c);
                 return false;
             }
-            Region(source, radius * 2 + 2, true);
-            float uplift = amp * 1.8f; // exagération visuelle à l'échelle de la grille planétaire
-            double needed = 0d, available = 0d;
-            for (int i = 0; i < regionA.Count; i++)
-            {
-                int cell = regionA[i];
-                if (!IsOcean(cell)) continue;
-                float d = regionG[i];
-                if (d < radius)
-                    needed += uplift * (1f - d / radius) * G.Area[cell];
-                else if (d < radius * 2f + 1f)
-                    available += water[cell] * 0.2f * G.Area[cell];
-            }
-            if (needed <= 0d || available <= 0d)
-            {
-                Log("Tsunami impossible : volume d'eau insuffisant.", c);
-                return false;
-            }
-            if (tsunamis.Count == 0)
-            {
-                for (int cell = 0; cell < M; cell++)
-                    tsunamiBase[cell] = IsOcean(cell) ? Ground(cell) + water[cell] : SeaLevel;
-                Array.Clear(tsunamiMomentum, 0, tsunamiMomentum.Length);
-                Array.Clear(tsunamiActive, 0, tsunamiActive.Length);
-                tsunamiAccum = 0f;
-            }
-            float fraction = (float)(Math.Min(needed, available) / available);
-            double salt = 0d, sediment = 0d, volume = 0d;
-            for (int i = 0; i < regionA.Count; i++)
-            {
-                int cell = regionA[i];
-                float d = regionG[i];
-                if (!IsOcean(cell) || d < radius || d >= radius * 2f + 1f) continue;
-                tsunamiActive[cell] = 1;
-                float share = 0.2f * fraction;
-                float moved = water[cell] * share;
-                volume += moved * G.Area[cell];
-                salt += waterState.salt[cell] * share * G.Area[cell];
-                sediment += susp[cell] * share * G.Area[cell];
-                water[cell] -= moved;
-                waterState.salt[cell] *= 1f - share;
-                susp[cell] *= 1f - share;
-            }
-            for (int i = 0; i < regionA.Count; i++)
-            {
-                int cell = regionA[i];
-                float d = regionG[i];
-                if (!IsOcean(cell) || d >= radius) continue;
-                tsunamiActive[cell] = 1;
-                double share = uplift * (1f - d / radius) * G.Area[cell] / needed;
-                water[cell] += (float)(volume * share / G.Area[cell]);
-                waterState.salt[cell] += (float)(salt * share / G.Area[cell]);
-                susp[cell] += (float)(sediment * share / G.Area[cell]);
-            }
-            tsunamis.Add(new Tsunami { epi = G.Dir[source], amp0 = amp, ang = 0f });
+            // Le front naît avec sa crête sur l'épicentre.
+            var wave = new Tsunami { epi = G.Dir[source], amp0 = amp, ang = TsunamiRise, speed = TsunamiSpeed, width = TsunamiTail };
+            wave.reach = SeaReach(wave);
+            FindFloodable(wave);
+            tsunamis.Add(wave);
             tsunamiCount++;
             return true;
         }
@@ -542,152 +513,276 @@ namespace LivingPlanet
             if (SpawnTsunami(c, 7f) && announce) Log("Tsunami déclenché (" + Where(c) + ")", c);
         }
 
+        static float Arc(Vector3 a, Vector3 b)
+        {
+            return 2f * Mathf.Asin(Mathf.Min(1f, (a - b).magnitude * 0.5f));
+        }
+
+        // Une des quatre voisines en diagonale de c, si l'eau peut y passer. Les côtés 0 et 1 d'une cellule
+        // sont opposés, comme les côtés 2 et 3 (voir PlanetGrid) : une diagonale touche un côté de chaque paire.
+        int SeaDiagonal(int c, int k)
+        {
+            int a = G.Nbr[c * 4 + k / 2], b = G.Nbr[c * 4 + 2 + k % 2];
+            if (a < 0 || b < 0 || (!IsOcean(a) && !IsOcean(b))) return -1;
+            for (int i = 0; i < 4; i++)
+            {
+                int n = G.Nbr[a * 4 + i];
+                if (n < 0 || n == c) continue;
+                for (int j = 0; j < 4; j++) if (G.Nbr[b * 4 + j] == n) return n;
+            }
+            return -1;
+        }
+
+        // Distance par mer (en radians) de l'épicentre à chaque cellule de mer à portée, négative ailleurs.
+        // C'est le plus court chemin de cellule de mer en cellule de mer : en mer ouverte il vaut la distance
+        // à vol d'oiseau, derrière une terre il s'allonge, et l'onde y arrive plus tard ou pas du tout.
+        float[] SeaReach(Tsunami wave)
+        {
+            int source = G.CellFromDir(wave.epi);
+            float limit = TsunamiRange * wave.amp0 * TsunamiDetour;
+            var path = new float[M];
+            for (int c = 0; c < M; c++) path[c] = -1f;
+            var queue = new Queue<int>();
+            path[source] = 0f;
+            queue.Enqueue(source);
+            while (queue.Count > 0)
+            {
+                int c = queue.Dequeue();
+                for (int k = 0; k < 8; k++)
+                {
+                    int n = k < 4 ? G.Nbr[c * 4 + k] : SeaDiagonal(c, k - 4);
+                    if (n < 0 || !IsOcean(n)) continue;
+                    float d = path[c] + Arc(G.Dir[c], G.Dir[n]);
+                    if (d > limit || (path[n] >= 0f && d >= path[n] - 1e-6f)) continue;
+                    path[n] = d;
+                    queue.Enqueue(n);
+                }
+            }
+            for (int c = 0; c < M; c++)
+                if (path[c] >= 0f) path[c] = Mathf.Max(Arc(wave.epi, G.Dir[c]), path[c] / TsunamiDetour);
+            return path;
+        }
+
+        // Terres que la crête peut mouiller : de proche en proche depuis le rivage, tant que le sol reste sous
+        // la crête attendue à cet endroit et à moins de TsunamiInland du rivage. Un relief plus haut que la
+        // crête arrête donc l'inondation. L'eau leur est prêtée par l'ensemble de la mer profonde à portée de
+        // l'onde : chaque cellule n'en cède qu'une fraction infime, sans creuser de trou.
+        void FindFloodable(Tsunami wave)
+        {
+            var cells = new List<int>();
+            var arrivals = new List<float>();
+            var hops = new List<int>();
+            float cellArc = G.CellSize / G.Radius;
+            int maxHops = Mathf.Max(1, Mathf.RoundToInt(TsunamiInland / G.CellSize));
+            void Spread(int cell, float arrival, int hop)
+            {
+                for (int k = 0; k < 4; k++)
+                {
+                    int n = G.Nbr[cell * 4 + k];
+                    if (n < 0 || mark[n] == markId || IsOcean(n)) continue;
+                    if (Ground(n) >= SeaLevel + wave.amp0 * TsunamiCrest * TsunamiFade(wave.amp0, arrival)) continue;
+                    mark[n] = markId;
+                    cells.Add(n); arrivals.Add(arrival); hops.Add(hop);
+                }
+            }
+            var lenders = new List<int>();
+            for (int c = 0; c < M; c++)
+                if (wave.reach[c] >= 0f && water[c] >= TsunamiDonorDepth) lenders.Add(c);
+            FillSeaHollow(G.CellFromDir(wave.epi), lenders);
+            markId++;
+            for (int c = 0; c < M; c++)
+                if (wave.reach[c] >= 0f) Spread(c, wave.reach[c] + cellArc, 1);
+            for (int i = 0; i < cells.Count; i++)
+                if (hops[i] < maxHops) Spread(cells[i], arrivals[i] + cellArc, hops[i] + 1);
+            wave.coast = cells.ToArray();
+            wave.coastAng = arrivals.ToArray();
+            wave.held = new float[cells.Count];
+            int stride = Mathf.Max(1, lenders.Count / TsunamiDonors);
+            wave.donor = new int[lenders.Count / stride];
+            for (int i = 0; i < wave.donor.Length; i++) wave.donor[i] = lenders[i * stride];
+        }
+
+        // Un impact en mer creuse le fond sous l'eau et laisse un creux dans la surface autour de l'épicentre.
+        // La mer profonde à portée le comble aussitôt, en cédant chacune la même mince épaisseur : c'est ce
+        // déplacement qui lance l'onde, et la mer ne garde pas un trou jusqu'aux prochains pas d'hydrologie.
+        void FillSeaHollow(int source, List<int> lenders)
+        {
+            const float Sunken = 0.5f;
+            var hollow = new List<int>();
+            double need = 0d, poolArea = 0d;
+            markId++;
+            if (IsOcean(source) && Ground(source) + water[source] < SeaLevel - Sunken) { mark[source] = markId; hollow.Add(source); }
+            for (int h = 0; h < hollow.Count; h++)
+            {
+                int c = hollow[h];
+                need += (SeaLevel - Ground(c) - water[c]) * G.Area[c];
+                for (int k = 0; k < 4; k++)
+                {
+                    int n = G.Nbr[c * 4 + k];
+                    if (n < 0 || mark[n] == markId || !IsOcean(n) || Ground(n) + water[n] >= SeaLevel - Sunken) continue;
+                    mark[n] = markId;
+                    hollow.Add(n);
+                }
+            }
+            for (int i = 0; i < lenders.Count; i++)
+                if (mark[lenders[i]] != markId) poolArea += G.Area[lenders[i]];
+            if (need <= 0d || poolArea <= 0d) return;
+            var salt = waterState.salt;
+            float given = Mathf.Min((float)(need / poolArea), TsunamiDonorDepth * 0.2f);
+            double lent = 0d, lentSalt = 0d, lentLoad = 0d;
+            for (int i = 0; i < lenders.Count; i++)
+            {
+                int sea = lenders[i];
+                if (mark[sea] == markId) continue;
+                float share = given / water[sea];
+                lent += given * G.Area[sea];
+                lentSalt += salt[sea] * share * G.Area[sea];
+                lentLoad += susp[sea] * share * G.Area[sea];
+                water[sea] -= given; salt[sea] *= 1f - share; susp[sea] *= 1f - share;
+            }
+            for (int h = 0; h < hollow.Count; h++)
+            {
+                int c = hollow[h];
+                float got = (float)((SeaLevel - Ground(c) - water[c]) * lent / need);
+                salt[c] += (float)(lentSalt * got / lent);
+                susp[c] += (float)(lentLoad * got / lent);
+                water[c] += got;
+            }
+        }
+
+        // Part de sa hauteur initiale que la crête garde quand le front a parcouru "front" radians : elle
+        // baisse vite au début, puis s'annule en douceur à la portée.
+        static float TsunamiFade(float amp, float front)
+        {
+            float left = Mathf.Max(0f, 1f - front / (TsunamiRange * amp));
+            return left * left;
+        }
+
+        // Hauteur de la crête à la distance "dist" de l'épicentre : nulle devant le front, montée raide, longue
+        // traîne. Elle faiblit avec l'avance du front : l'onde s'éteint partout en même temps, sans coupure.
+        static float TsunamiHeight(Tsunami wave, float dist)
+        {
+            float behind = wave.ang - dist;
+            if (dist < 0f || behind <= 0f) return 0f;
+            float shape = behind < TsunamiRise ? behind / TsunamiRise : 1f - (behind - TsunamiRise) / wave.width;
+            return Mathf.Max(0f, shape) * TsunamiFade(wave.amp0, wave.ang) * wave.amp0 * TsunamiCrest;
+        }
+
         public bool StepTsunamis(float dt)
         {
             if (tsunamis.Count == 0 || dt <= 0f) return false;
-            if (tsunamiOut == null) tsunamiOut = new float[M * 4];
-            if (tsunamiActiveN == null) tsunamiActiveN = new byte[M];
-            tsunamiAccum += dt;
-            const float step = 0.1f;
-            int steps = 0;
-            while (tsunamiAccum >= step && steps++ < 4)
+            for (int i = tsunamis.Count - 1; i >= 0; i--)
             {
-                StepTsunamiWater(step);
-                tsunamiAccum -= step;
-                for (int i = tsunamis.Count - 1; i >= 0; i--)
-                {
-                    tsunamis[i].ang += step;
-                    if (tsunamis[i].ang >= 90f) tsunamis.RemoveAt(i);
-                }
-                if (tsunamis.Count == 0) break;
+                var wave = tsunamis[i];
+                if (wave.reach == null) wave.reach = SeaReach(wave);
+                wave.ang += wave.speed * dt;
+                StepTsunamiShore(wave, dt);
+                // À la portée la crête est nulle partout : toute l'eau prêtée vient d'être reprise.
+                if (wave.ang >= TsunamiRange * wave.amp0) tsunamis.RemoveAt(i);
             }
-            return steps > 0;
+            return true;
         }
 
+        // Poussée de l'onde vue par le rendu : elle s'éloigne de l'épicentre et grandit avec la crête.
         public Vector3 TsunamiFlow(int c)
         {
-            if (tsunamis.Count == 0 || tsunamiActive[c] == 0) return Vector3.zero;
             Vector3 flow = Vector3.zero;
-            for (int k = 0; k < 4; k++) flow += G.Tan[c * 4 + k] * tsunamiMomentum[c * 4 + k];
-            return flow * 0.5f;
+            for (int i = 0; i < tsunamis.Count; i++)
+            {
+                var wave = tsunamis[i];
+                float height = wave.reach != null ? TsunamiHeight(wave, wave.reach[c]) : 0f;
+                if (height > 0f) flow += Vector3.ProjectOnPlane(G.Dir[c] - wave.epi, G.Dir[c]).normalized * (height * TsunamiPush);
+            }
+            return flow;
         }
 
         public float TsunamiElevation(int c)
         {
-            return tsunamis.Count > 0 && tsunamiActive[c] != 0
-                ? Ground(c) + water[c] - tsunamiBase[c] : 0f;
+            float height = 0f;
+            for (int i = 0; i < tsunamis.Count; i++)
+                if (tsunamis[i].reach != null) height += TsunamiHeight(tsunamis[i], tsunamis[i].reach[c]);
+            return height;
         }
 
-        // Débit minimal (épaisseur par sous-pas) reçu d'une voisine active pour qu'une cellule terrestre rejoigne
-        // l'onde : au-dessus du ruissellement d'une simple pellicule de pluie, très en dessous d'une vraie vague.
-        const float TsunamiReachFlow = 0.005f;
-
-        void StepTsunamiWater(float dt)
+        // Lame d'eau que la crête fait passer sur une terre inondable : ce dont elle dépasse son sol, sans
+        // jamais excéder sa propre hauteur (une cuvette à sec sous le niveau de la mer n'est pas remplie).
+        float ShoreTarget(Tsunami wave, int i)
         {
-            // L'onde n'active que les cellules qu'elle atteint, sans perturber les lacs et rivières éloignés.
-            // En mer, elle se propage par son écart à la surface de référence ou par son inertie. Dès qu'une
-            // terre est en jeu, cet écart n'a plus de sens (sa référence est le niveau de la mer, donc il vaut
-            // l'altitude et serait toujours "non nul") : seule l'eau réellement poussée vers la cellule compte.
-            Par.For(M, (start, end) =>
+            float crest = TsunamiHeight(wave, wave.coastAng[i]);
+            return Mathf.Clamp(SeaLevel + crest - Ground(wave.coast[i]), 0f, crest);
+        }
+
+        // Chaque terre inondable vise sa lame d'eau. L'écart avec l'eau déjà prêtée est pris à la mer profonde
+        // ou lui est rendu, avec sa part de sel et de sédiment en suspension : quand la crête est passée, la
+        // cible retombe à zéro et le retrait se fait par le même chemin.
+        void StepTsunamiShore(Tsunami wave, float dt)
+        {
+            if (wave.coast == null || wave.held == null || wave.donor == null || wave.donor.Length == 0) return;
+            var salt = waterState.salt;
+            double wanted = 0d, back = 0d, backSalt = 0d, backLoad = 0d;
+            for (int i = 0; i < wave.coast.Length; i++)
             {
-                for (int c = start; c < end; c++)
-                {
-                    byte active = tsunamiActive[c];
-                    if (active == 0)
-                        for (int k = 0; k < 4; k++)
-                        {
-                            int edge = c * 4 + k, n = G.Nbr[edge];
-                            if (n < 0 || tsunamiActive[n] == 0 || water[n] <= 0.001f) continue;
-                            int toward = n * 4 + G.Back[edge];
-                            bool reached;
-                            if (IsOcean(c) && IsOcean(n))
-                            {
-                                float head = Ground(n) + water[n] - tsunamiBase[n];
-                                reached = Mathf.Abs(head) > 0.01f || Mathf.Abs(tsunamiMomentum[toward]) > 0.01f;
-                            }
-                            // Débit du pas précédent, relu depuis l'inertie (sauvegardée) plutôt que depuis
-                            // tsunamiOut (non sauvegardé) : le résultat reste identique après un rechargement.
-                            else reached = tsunamiMomentum[toward] * dt > TsunamiReachFlow;
-                            if (reached) { active = 1; break; }
-                        }
-                    tsunamiActiveN[c] = active;
-                }
-            });
-            var oldActive = tsunamiActive; tsunamiActive = tsunamiActiveN; tsunamiActiveN = oldActive;
-            Par.For(M, (start, end) =>
+                int land = wave.coast[i];
+                float target = ShoreTarget(wave, i), change = target - wave.held[i];
+                if (change >= 0f) continue;
+                // On ne reprend jamais plus que ce qui se trouve sur la cellule : si l'hydrologie l'a déjà
+                // drainée, le reste du prêt est abandonné.
+                float moved = Mathf.Min(-change, water[land]);
+                wave.held[i] = target;
+                if (moved <= 0f) continue;
+                float share = moved / water[land];
+                back += moved * G.Area[land];
+                backSalt += salt[land] * share * G.Area[land];
+                backLoad += susp[land] * share * G.Area[land];
+                water[land] -= moved; salt[land] *= 1f - share; susp[land] *= 1f - share;
+                ScourShore(land, moved, dt);
+            }
+            // Les emprunts se comptent après les retraits : le sol qu'un retrait vient d'éroder change la cible.
+            for (int i = 0; i < wave.coast.Length; i++)
+                wanted += Mathf.Max(0f, ShoreTarget(wave, i) - wave.held[i]) * G.Area[wave.coast[i]];
+            if (wanted <= 0d && back <= 0d) return;
+
+            double poolArea = 0d;
+            for (int i = 0; i < wave.donor.Length; i++) poolArea += G.Area[wave.donor[i]];
+            // Chaque cellule de mer prête et récupère la même épaisseur, jamais plus d'un cinquième de la
+            // profondeur exigée d'elle à la fois : la mer retrouve ainsi exactement sa surface.
+            float lending = Mathf.Min((float)(wanted / poolArea), TsunamiDonorDepth * 0.2f);
+            float returned = (float)(back / poolArea), returnedSalt = (float)(backSalt / poolArea), returnedLoad = (float)(backLoad / poolArea);
+            double lent = 0d, lentSalt = 0d, lentLoad = 0d;
+            for (int i = 0; i < wave.donor.Length; i++)
             {
-                for (int c = start; c < end; c++)
-                {
-                    if (tsunamiActive[c] == 0)
-                    {
-                        int first = c * 4;
-                        tsunamiOut[first] = tsunamiOut[first + 1] = tsunamiOut[first + 2] = tsunamiOut[first + 3] = 0f;
-                        continue;
-                    }
-                    float head = Ground(c) + water[c] - tsunamiBase[c];
-                    float total = 0f;
-                    int b = c * 4;
-                    for (int k = 0; k < 4; k++)
-                    {
-                        int edge = b + k, n = G.Nbr[edge];
-                        if (n < 0) { tsunamiMomentum[edge] = tsunamiOut[edge] = 0f; continue; }
-                        float other = Ground(n) + water[n] - tsunamiBase[n];
-                        // Pression et inertie sur chaque arête ; la surface de référence retire les pentes
-                        // préexistantes de l'océan sans supprimer les crêtes et creux créés par l'onde.
-                        float v = tsunamiMomentum[edge] * 0.997f + (head - other) * 2f * dt;
-                        if (water[c] <= 0.001f && v > 0f) v = 0f;
-                        if (water[n] <= 0.001f && v < 0f) v = 0f;
-                        if (water[n] <= 0.001f && head <= other && v > 0f) v = 0f;
-                        tsunamiMomentum[edge] = v;
-                        tsunamiOut[edge] = Mathf.Max(0f, v) * dt;
-                        total += tsunamiOut[edge];
-                    }
-                    float scale = total > water[c] * 0.45f ? water[c] * 0.45f / total : 1f;
-                    for (int k = 0; k < 4; k++)
-                    {
-                        tsunamiOut[b + k] *= scale;
-                        if (tsunamiMomentum[b + k] > 0f) tsunamiMomentum[b + k] *= scale;
-                    }
-                }
-            });
-            Par.For(M, (start, end) =>
+                int sea = wave.donor[i];
+                float given = Mathf.Min(lending, water[sea]);
+                float share = given > 0f ? given / water[sea] : 0f;
+                lent += given * G.Area[sea];
+                lentSalt += salt[sea] * share * G.Area[sea];
+                lentLoad += susp[sea] * share * G.Area[sea];
+                water[sea] += returned - given;
+                salt[sea] += returnedSalt - salt[sea] * share;
+                susp[sea] += returnedLoad - susp[sea] * share;
+            }
+            if (lent <= 0d) return;
+
+            float granted = (float)(lent / wanted);
+            for (int i = 0; i < wave.coast.Length; i++)
             {
-                for (int c = start; c < end; c++)
-                {
-                    int b = c * 4;
-                    float outgoing = tsunamiOut[b] + tsunamiOut[b + 1] + tsunamiOut[b + 2] + tsunamiOut[b + 3];
-                    float fraction = water[c] > 1e-6f ? outgoing / water[c] : 0f;
-                    float w = water[c] - outgoing;
-                    float sp = susp[c] * (1f - fraction);
-                    float salt = waterState.salt[c] * (1f - fraction);
-                    float moving = outgoing;
-                    for (int k = 0; k < 4; k++)
-                    {
-                        int n = G.Nbr[b + k];
-                        if (n < 0 || water[n] <= 1e-6f) continue;
-                        float incoming = tsunamiOut[n * 4 + G.Back[b + k]] * G.Area[n] / G.Area[c];
-                        w += incoming;
-                        moving += incoming;
-                        sp += susp[n] * incoming / water[n];
-                        salt += waterState.salt[n] * incoming / water[n];
-                    }
-                    if (moving <= 0f)
-                    {
-                        waterN[c] = water[c]; suspN[c] = susp[c];
-                        waterState.nextSalt[c] = waterState.salt[c];
-                        continue;
-                    }
-                    float eroded = ErodeTsunamiBed(c, moving, dt);
-                    sp += eroded;
-                    if (w < 0.003f && sp > 0f) { DepositWater(c, sp, 0.3f); sp = 0f; }
-                    waterN[c] = Mathf.Max(0f, w);
-                    suspN[c] = Mathf.Max(0f, sp);
-                    waterState.nextSalt[c] = Mathf.Max(0f, salt);
-                }
-            });
-            var oldWater = water; water = waterN; waterN = oldWater;
-            var oldSusp = susp; susp = suspN; suspN = oldSusp;
-            var oldSalt = waterState.salt; waterState.salt = waterState.nextSalt; waterState.nextSalt = oldSalt;
+                int land = wave.coast[i];
+                float got = (ShoreTarget(wave, i) - wave.held[i]) * granted;
+                if (got <= 0f) continue;
+                water[land] += got;
+                salt[land] += (float)(lentSalt * got / lent);
+                susp[land] += (float)(lentLoad * got / lent);
+                wave.held[i] += got;
+                ScourShore(land, got, dt);
+            }
+        }
+
+        // L'eau qui passe sur une terre arrache un peu de son sol ; ce qu'elle porte encore se dépose quand
+        // la cellule s'assèche.
+        void ScourShore(int land, float movingWater, float dt)
+        {
+            susp[land] += ErodeTsunamiBed(land, movingWater, dt);
+            if (water[land] < 0.003f && susp[land] > 0f) { DepositWater(land, susp[land], 0.3f); susp[land] = 0f; }
         }
 
         float ErodeTsunamiBed(int c, float movingWater, float dt)

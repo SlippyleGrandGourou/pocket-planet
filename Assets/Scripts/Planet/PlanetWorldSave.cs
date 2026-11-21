@@ -571,14 +571,14 @@ namespace LivingPlanet
                     if (version < 15) missingFields.Add("activePlates");
                     if (version < 18) missingFields.AddRange(new[] { "mantleSolidN", "mantleResidualN", "subductionLayersN", "boundaryDecay", "orogenyHeightVariance", "channelNoise", "CoastalErode", "CoastalErodeDepth", "riftDecay" });
                     if (version < 19) missingFields.AddRange(new[] { "LithifyDepth", "LithifyRate", "LithifyCompaction" });
-                    if (version < 20) missingFields.AddRange(new[] { "tsunamiBase", "tsunamiMomentum", "tsunamiActive", "tsunamiAccum" });
                     var ignoreFields = new List<string>();
                     // versions 5 et 6 ont déjà subductionLayers mais à l'ancienne taille (3 couches/cellule au lieu de 6) :
                     // on relit ces octets pour ne pas désynchroniser le flux, mais on garde le tableau neuf (remis à zéro).
                     if (version >= 5 && version < 7) ignoreFields.Add("subductionLayers");
                     PlanetSave.ReadObject(r, Sim, maxItems, missingFields.ToArray(), ignoreFields.ToArray());
-                    // Les anciens anneaux visuels n'ont pas d'état d'onde réutilisable ; l'eau est conservée.
-                    if (version < 20) Sim.tsunamis.Clear();
+                    // Les tsunamis des versions précédentes (anneaux visuels, puis solveur d'onde) n'ont pas d'état
+                    // réutilisable par le front actuel ; l'eau est conservée telle qu'elle a été sauvegardée.
+                    if (version < 21) Sim.tsunamis.Clear();
                     if (version < 12) Sim.MigrateIcebergVolumes();
                     if (version < 4) Sim.MigrateTectonicTimescale();
                     else if (version < 9 && Mathf.Abs(Sim.plateSpeed - 0.2f * Sim.Activity) < 0.0001f)

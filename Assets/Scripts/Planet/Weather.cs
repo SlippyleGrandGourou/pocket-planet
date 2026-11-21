@@ -143,7 +143,7 @@ namespace LivingPlanet
         }
 
         // ------------------------------------------------------------ dépressions / anticyclones (Coriolis)
-        const int PressN = 14;
+        const int PressN = 24;
         Vector3[] pressDir;
         float[] pressAmp, pressSgn, pressRad, pressBase;
         int[] pressAge, pressLife;
@@ -155,20 +155,23 @@ namespace LivingPlanet
 
         void SpawnPress(int i, bool initial)
         {
-            bool low = i % 2 == 0;
-            float lat = Mathf.Lerp(low ? 30f : 12f, low ? 68f : 34f, Pr()) * (Pr() < 0.5f ? -1f : 1f) * Mathf.Deg2Rad;
+            // Deux dépressions pour un anticyclone ; deux des dépressions naissent sous les tropiques.
+            bool low = i % 3 != 2, tropical = i % 12 == 0;
+            float lat = (tropical ? Mathf.Lerp(6f, 22f, Pr()) : Mathf.Lerp(low ? 30f : 12f, low ? 68f : 34f, Pr())) * (Pr() < 0.5f ? -1f : 1f) * Mathf.Deg2Rad;
             float lon = Pr() * Mathf.PI * 2f;
             pressDir[i] = new Vector3(Mathf.Cos(lat) * Mathf.Cos(lon), Mathf.Sin(lat), Mathf.Cos(lat) * Mathf.Sin(lon));
             pressSgn[i] = low ? 1f : -1f;
-            pressRad[i] = (low ? 0.24f : 0.3f) + 0.2f * Pr();
+            pressRad[i] = (low ? 0.2f : 0.3f) + 0.2f * Pr();
             pressBase[i] = low ? 0.7f + 0.7f * Pr() : 0.5f + 0.4f * Pr();
-            pressLife[i] = 40 + prnd.Next(60);
+            // Quelques mois : assez pour traverser un océan, pas assez pour que le temps se fige.
+            pressLife[i] = 12 + prnd.Next(20);
             pressAge[i] = initial ? prnd.Next(pressLife[i]) : 0;
         }
 
         void StepPressure()
         {
-            if (pressDir == null)
+            // Les sauvegardes d'avant l'ajout des systèmes supplémentaires n'en contiennent que quatorze.
+            if (pressDir == null || pressDir.Length != PressN)
             {
                 pressDir = new Vector3[PressN]; pressAmp = new float[PressN]; pressSgn = new float[PressN]; pressRad = new float[PressN];
                 pressBase = new float[PressN]; pressAge = new int[PressN]; pressLife = new int[PressN];
@@ -178,15 +181,14 @@ namespace LivingPlanet
             {
                 if (++pressAge[i] >= pressLife[i]) SpawnPress(i, false);
                 Vector3 d = pressDir[i];
-                Vector3 east = new Vector3(-d.z, 0f, d.x);
-                east = east.sqrMagnitude < 1e-6f ? Vector3.right : east.normalized;
                 Vector3 north = Vector3.up - d * d.y;
                 north = north.sqrMagnitude < 1e-6f ? Vector3.forward : north.normalized;
                 float hs = d.y >= 0f ? 1f : -1f;
-                // les dépressions dérivent vers l'est et les pôles, les anticyclones restent presque en place
-                float se = pressSgn[i] > 0f ? 0.03f : -0.004f;
-                float sn = pressSgn[i] > 0f ? 0.008f * hs : 0f;
-                pressDir[i] = (d + east * se + north * sn).normalized;
+                // Les dépressions sont portées par le vent d'altitude (vers l'est aux latitudes moyennes, vers l'ouest
+                // sous les tropiques) et glissent vers les pôles ; les anticyclones restent presque en place.
+                bool low = pressSgn[i] > 0f;
+                Vector3 carried = Vector3.ClampMagnitude(windHigh[G.CellFromDir(d)] * (low ? 0.1f : 0.02f), 0.08f);
+                pressDir[i] = (d + carried + north * (low ? 0.006f * hs : 0f)).normalized;
                 pressAmp[i] = pressBase[i] * Mathf.Sqrt(Mathf.Sin(Mathf.PI * pressAge[i] / pressLife[i]));
             }
         }

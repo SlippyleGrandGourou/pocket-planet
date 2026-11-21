@@ -135,7 +135,7 @@ namespace LivingPlanet
                 }
                 else if (f.FieldType != typeof(PlanetGrid) && f.FieldType != typeof(PlanetSim) &&
                          f.FieldType != typeof(Ecosystem) && f.FieldType != typeof(EcoFields) &&
-                         f.FieldType != typeof(WaterState) && !typeof(System.Random).IsAssignableFrom(f.FieldType) && !typeof(Delegate).IsAssignableFrom(f.FieldType))
+                         f.FieldType != typeof(WaterState) && f.FieldType != typeof(Continentality) && !typeof(System.Random).IsAssignableFrom(f.FieldType) && !typeof(Delegate).IsAssignableFrom(f.FieldType))
                     throw new InvalidDataException("Type non pris en charge dans la sauvegarde : " + type.Name + "." + f.Name);
             }
             result.Sort((a, b) => string.CompareOrdinal(a.Name, b.Name));

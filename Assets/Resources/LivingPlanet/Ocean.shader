@@ -148,10 +148,8 @@ Shader "LivingPlanet/Ocean"
                 sky = max(sky, float3(0.20, 0.38, 0.62) * (0.1 + 0.9 * day));
                 col = lerp(col, sky, fres * 0.85) + spec * l.color * 0.26;
 
-                // Onde de tsunami : crête éclaircie, creux assombri, et écume là où le front est raide.
+                // Onde de tsunami : crête éclaircie, et écume là où le front est raide.
                 float crest = smoothstep(0.15, 2.5, i.water.w);
-                float trough = smoothstep(0.15, 2.5, -i.water.w);
-                col *= 1.0 - 0.22 * trough;
                 col += float3(0.05, 0.13, 0.15) * crest * day;
                 float steep = length(slope);
 

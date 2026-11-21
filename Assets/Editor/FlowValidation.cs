@@ -224,6 +224,50 @@ public static class FlowValidation
         Check(separated.water[isolatedSea] == 10f, "Tsunami source transferred water across land");
     }
 
+    // En pleine mer : l'onde traverse vite, s'arrête d'elle-même, laisse la mer à plat et ne touche pas un
+    // fond qu'elle survole de loin.
+    static void TsunamiOpenSea()
+    {
+        var g = new PlanetGrid(64, 600f);
+        var s = new PlanetSim(g);
+        for (int c = 0; c < s.M; c++)
+        {
+            s.rock[c] = -41f; s.sed[c] = 1f; s.water[c] = 40f;
+            s.mix[c * 4 + PlanetSim.Sand] = 1f;
+            s.waterState.salt[c] = 40f * PlanetSim.OceanSalinity;
+        }
+        int source = g.CellIndex(0, 32, 32);
+        // À 600 unités de la source : un quart de face plus loin.
+        int far = -1;
+        for (int c = 0; c < s.M && far < 0; c++)
+            if (Mathf.Abs(Vector3.Angle(g.Dir[source], g.Dir[c]) * Mathf.Deg2Rad * g.Radius - 600f) < g.CellSize * 0.5f) far = c;
+        var surface0 = new float[s.M];
+        var ground0 = new float[s.M];
+        for (int c = 0; c < s.M; c++) { ground0[c] = s.Ground(c); surface0[c] = ground0[c] + s.water[c]; }
+        double water = Weighted(s, s.water);
+        double salt = Weighted(s, s.waterState.salt);
+        Check(far >= 0 && s.SpawnTsunami(source, 7f), "Could not start open-sea tsunami");
+        float arrival = -1f, time = 0f;
+        while (s.tsunamis.Count > 0)
+        {
+            Check(time < 60f, "Tsunami lasted more than a minute");
+            s.StepTsunamis(0.1f);
+            time += 0.1f;
+            if (arrival < 0f && Mathf.Abs(s.TsunamiElevation(far)) > 0.05f) arrival = time;
+        }
+        Check(arrival > 0f && arrival < 12f, "Tsunami took too long to cross 600 units of open sea: " + arrival);
+        float roughest = 0f;
+        for (int c = 0; c < s.M; c++)
+        {
+            roughest = Mathf.Max(roughest, Mathf.Abs(s.Ground(c) + s.water[c] - surface0[c]));
+            Check(s.Ground(c) == ground0[c], "Tsunami scoured a deep sea bed at cell " + c);
+        }
+        Check(roughest < 0.3f, "Tsunami left the open sea rough: " + roughest);
+        Near(water, Weighted(s, s.water), "Open-sea tsunami water");
+        Near(salt, Weighted(s, s.waterState.salt), "Open-sea tsunami salt");
+        Debug.Log("Tsunami crossed 600 units in " + arrival + " s, ended after " + time + " s, residual " + roughest);
+    }
+
     static void TsunamiSaveContinuation(PlanetSim s)
     {
         var save = typeof(PlanetSim).Assembly.GetType("LivingPlanet.PlanetSave");
@@ -1017,6 +1061,7 @@ public static class FlowValidation
     public static void RunTsunami()
     {
         TsunamiRunup();
+        TsunamiOpenSea();
         TsunamiHydroStability();
         Debug.Log("TSUNAMI VALIDATION PASSED");
     }
@@ -1028,6 +1073,7 @@ public static class FlowValidation
         SedimentTransport(true, true);
         AreaWeightedTransfers();
         TsunamiRunup();
+        TsunamiOpenSea();
         TsunamiHydroStability();
         CoastlineWaterLevel();
         SpeedIndependentPhysics();

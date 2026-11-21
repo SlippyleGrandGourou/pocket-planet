@@ -127,7 +127,9 @@ namespace LivingPlanet
                 // Couches visuelles d'érosion (voir ColorCell ViewMode 10/11) : simple moyenne mobile diagnostique
                 // reconstruite en quelques dizaines de pas, pas besoin d'être persistée (même traitement qu'aeolian).
                 if (type == typeof(PlanetSim) && (f.Name == "waterErode" || f.Name == "windErode")) continue;
-                if (type == typeof(PlanetSim) && (f.Name == "tsunamiOut" || f.Name == "tsunamiActiveN")) continue;
+                if (type == typeof(PlanetSim) && (f.Name == "tsunamiOut" || f.Name == "tsunamiCells" ||
+                    f.Name == "tsunamiTouched" || f.Name == "tsunamiStamp" || f.Name == "tsunamiCellCount" ||
+                    f.Name == "tsunamiTouchedCount" || f.Name == "tsunamiStampId")) continue;
                 if (type == typeof(WaterState) && (f.Name == "nextSalt" || f.Name == "outSalt" || f.Name == "airOutScale")) continue;
                 if (DataType(f.FieldType))
                 {

@@ -263,31 +263,57 @@ public static class FlowValidation
         }
     }
 
-    // Un impact en mer creuse le fond sous l'eau : la mer comble ce creux à la naissance de l'onde, sans
-    // créer ni perdre d'eau ou de sel.
+    // Un impact en mer creuse le fond sous l'eau : la mer comble ce creux à la naissance de l'onde, jusqu'au
+    // niveau de la mer qui l'entoure, sans créer ni perdre d'eau ou de sel. Un tsunami sans impact ne nivelle
+    // rien, même là où la mer est plus basse que son niveau moyen.
     static void TsunamiFillsImpactHollow()
     {
         var g = new PlanetGrid(32, 150f);
         var s = new PlanetSim(g);
-        for (int c = 0; c < s.M; c++) { s.rock[c] = -20f; s.water[c] = 20f; s.waterState.salt[c] = 20f * PlanetSim.OceanSalinity; }
+        // Mer partout trois unités sous le niveau moyen déclaré, comme une mer en pente loin de son équilibre.
+        for (int c = 0; c < s.M; c++) { s.rock[c] = -23f; s.water[c] = 20f; s.waterState.salt[c] = 20f * PlanetSim.OceanSalinity; }
         int source = g.CellIndex(0, 16, 16);
         for (int j = 14; j <= 18; j++)
-            for (int i = 14; i <= 18; i++) s.rock[g.CellIndex(0, i, j)] = -32f;
+            for (int i = 14; i <= 18; i++) s.rock[g.CellIndex(0, i, j)] = -35f;
+        var water0 = (float[])s.water.Clone();
         double water = Weighted(s, s.water);
         double salt = Weighted(s, s.waterState.salt);
-        Check(s.SpawnTsunami(source, 9f), "Could not start impact tsunami");
-        for (int j = 14; j <= 18; j++)
-            for (int i = 14; i <= 18; i++)
-            {
-                int c = g.CellIndex(0, i, j);
-                Check(Mathf.Abs(s.Ground(c) + s.water[c] - s.SeaLevel) < 0.01f,
-                    "Impact hollow was not filled at cell " + c + ": " + (s.Ground(c) + s.water[c]));
-            }
+        Check(s.SpawnTsunami(source, 9f), "Could not start plain tsunami");
+        for (int c = 0; c < s.M; c++)
+            Check(s.water[c] == water0[c], "Tsunami without impact levelled the sea at cell " + c);
+        s.tsunamis.Clear();
+        Check(s.SpawnTsunami(source, 9f, 4f * g.CellSize), "Could not start impact tsunami");
         float lowest = 0f;
-        for (int c = 0; c < s.M; c++) lowest = Mathf.Min(lowest, s.Ground(c) + s.water[c] - s.SeaLevel);
-        Check(lowest > -0.5f, "Filling the impact hollow dug the sea elsewhere: " + lowest);
+        for (int c = 0; c < s.M; c++) lowest = Mathf.Min(lowest, s.Ground(c) + s.water[c] + 3f);
+        Check(Mathf.Abs(s.Ground(source) + s.water[source] + 3f) < 0.05f,
+            "Impact hollow was not filled to the surrounding sea: " + (s.Ground(source) + s.water[source]));
+        Check(lowest > -0.5f, "Impact left a hollow in the sea: " + lowest);
         Near(water, Weighted(s, s.water), "Impact hollow water");
         Near(salt, Weighted(s, s.waterState.salt), "Impact hollow salt");
+    }
+
+    // Une terre sur le trajet retarde l'onde : derrière un mur percé d'une seule passe, la crête n'arrive
+    // qu'après avoir fait le tour, et pas au moment où le front y serait à vol d'oiseau.
+    static void TsunamiGoesAroundLand()
+    {
+        var g = new PlanetGrid(48, 150f);
+        var s = new PlanetSim(g);
+        for (int c = 0; c < s.M; c++) { s.rock[c] = -10f; s.water[c] = 10f; }
+        for (int j = 0; j < 44; j++) s.rock[g.CellIndex(0, 24, j)] = 30f;
+        for (int j = 0; j < 44; j++) s.water[g.CellIndex(0, 24, j)] = 0f;
+        int source = g.CellIndex(0, 20, 36), behind = g.CellIndex(0, 28, 36);
+        Check(s.SpawnTsunami(source, 10f), "Could not start tsunami beside a wall");
+        var wave = s.tsunamis[0];
+        float direct = Vector3.Angle(g.Dir[source], g.Dir[behind]) * Mathf.Deg2Rad;
+        bool arrived = false;
+        while (s.tsunamis.Count > 0)
+        {
+            s.StepTsunamis(0.1f);
+            float height = s.TsunamiElevation(behind);
+            if (wave.ang < direct * 1.5f) Check(height == 0f, "Tsunami crest crossed the land in a straight line");
+            arrived |= height > 0f;
+        }
+        Check(arrived, "Tsunami never went around the land");
     }
 
     static void TsunamiSaveContinuation(PlanetSim s)
@@ -944,6 +970,7 @@ public static class FlowValidation
         TsunamiRunup();
         TsunamiRoundFront();
         TsunamiFillsImpactHollow();
+        TsunamiGoesAroundLand();
         TsunamiHydroStability();
         Debug.Log("TSUNAMI VALIDATION PASSED");
     }
@@ -957,6 +984,7 @@ public static class FlowValidation
         TsunamiRunup();
         TsunamiRoundFront();
         TsunamiFillsImpactHollow();
+        TsunamiGoesAroundLand();
         TsunamiHydroStability();
         CoastlineWaterLevel();
         SpeedIndependentPhysics();

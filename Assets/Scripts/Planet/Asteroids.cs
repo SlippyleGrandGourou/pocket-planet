@@ -451,7 +451,7 @@ namespace LivingPlanet
             terrainDirty = true;
             string msg = "IMPACT D'ASTÉROÏDE (" + Where(c) + ")";
             if (meltFed > 0.15f) msg += " - le magma remonte et s'écoule du cratère";
-            if (sea && SpawnTsunami(c, Mathf.Min(10f, 4f + 5f * a.size))) msg += " - ALERTE TSUNAMI";
+            if (sea && SpawnTsunami(c, Mathf.Min(10f, 4f + 5f * a.size), rw * elong * 0.85f)) msg += " - ALERTE TSUNAMI";
             Log(msg, c);
         }
 

@@ -478,7 +478,8 @@ namespace LivingPlanet
         // mer ouverte (FlowValidation.TsunamiRoundFront le vérifie) : en dessous, le front reste un cercle.
         const float TsunamiDetour = 1.2f;
 
-        public bool SpawnTsunami(int c, float amp)
+        // craterRadius : rayon du cratère qu'un impact vient de creuser sous la mer, 0 pour un séisme.
+        public bool SpawnTsunami(int c, float amp, float craterRadius = 0f)
         {
             if (tsunamis.Count >= 3) { Log("Tsunami impossible : trois tsunamis sont déjà actifs.", c); return false; }
             if (amp <= 0f) { Log("Tsunami impossible : amplitude insuffisante.", c); return false; }
@@ -502,6 +503,7 @@ namespace LivingPlanet
             // Le front naît avec sa crête sur l'épicentre.
             var wave = new Tsunami { epi = G.Dir[source], amp0 = amp, ang = TsunamiRise, speed = TsunamiSpeed, width = TsunamiTail };
             wave.reach = SeaReach(wave);
+            if (craterRadius > 0f) FillSeaHollow(wave, source, craterRadius);
             FindFloodable(wave);
             tsunamis.Add(wave);
             tsunamiCount++;
@@ -552,7 +554,8 @@ namespace LivingPlanet
                 {
                     int n = k < 4 ? G.Nbr[c * 4 + k] : SeaDiagonal(c, k - 4);
                     if (n < 0 || !IsOcean(n)) continue;
-                    float d = path[c] + Arc(G.Dir[c], G.Dir[n]);
+                    // Entre deux cellules voisines, la corde vaut l'arc.
+                    float d = path[c] + (G.Dir[c] - G.Dir[n]).magnitude;
                     if (d > limit || (path[n] >= 0f && d >= path[n] - 1e-6f)) continue;
                     path[n] = d;
                     queue.Enqueue(n);
@@ -586,12 +589,13 @@ namespace LivingPlanet
                 }
             }
             var lenders = new List<int>();
-            for (int c = 0; c < M; c++)
-                if (wave.reach[c] >= 0f && water[c] >= TsunamiDonorDepth) lenders.Add(c);
-            FillSeaHollow(G.CellFromDir(wave.epi), lenders);
             markId++;
             for (int c = 0; c < M; c++)
-                if (wave.reach[c] >= 0f) Spread(c, wave.reach[c] + cellArc, 1);
+            {
+                if (wave.reach[c] < 0f) continue;
+                Spread(c, wave.reach[c] + cellArc, 1);
+                if (water[c] >= TsunamiDonorDepth) lenders.Add(c);
+            }
             for (int i = 0; i < cells.Count; i++)
                 if (hops[i] < maxHops) Spread(cells[i], arrivals[i] + cellArc, hops[i] + 1);
             wave.coast = cells.ToArray();
@@ -602,30 +606,43 @@ namespace LivingPlanet
             for (int i = 0; i < wave.donor.Length; i++) wave.donor[i] = lenders[i * stride];
         }
 
-        // Un impact en mer creuse le fond sous l'eau et laisse un creux dans la surface autour de l'épicentre.
-        // La mer profonde à portée le comble aussitôt, en cédant chacune la même mince épaisseur : c'est ce
-        // déplacement qui lance l'onde, et la mer ne garde pas un trou jusqu'aux prochains pas d'hydrologie.
-        void FillSeaHollow(int source, List<int> lenders)
+        // Un impact en mer creuse le fond sous l'eau et laisse un creux dans la surface, sur le rayon du cratère.
+        // La mer profonde à portée de l'onde le comble aussitôt jusqu'au niveau de la mer qui l'entoure, en cédant
+        // partout la même mince épaisseur : c'est ce déplacement qui lance l'onde, et la mer ne garde pas un trou
+        // jusqu'aux prochains pas d'hydrologie.
+        void FillSeaHollow(Tsunami wave, int source, float craterRadius)
         {
-            const float Sunken = 0.5f;
+            float radius = craterRadius / G.CellSize;
+            Region(source, Mathf.CeilToInt(radius * 1.5f) + 3, true);
+            // Niveau de la mer intacte : la couronne de deux cellules juste au-delà du cratère.
+            double around = 0d, aroundArea = 0d;
+            for (int i = 0; i < regionA.Count; i++)
+            {
+                int c = regionA[i];
+                if (regionG[i] < radius || regionG[i] >= radius + 2f) continue;
+                around += (Ground(c) + water[c]) * G.Area[c];
+                aroundArea += G.Area[c];
+            }
+            if (aroundArea <= 0d) return;
+            float level = (float)(around / aroundArea);
             var hollow = new List<int>();
             double need = 0d, poolArea = 0d;
             markId++;
-            if (IsOcean(source) && Ground(source) + water[source] < SeaLevel - Sunken) { mark[source] = markId; hollow.Add(source); }
-            for (int h = 0; h < hollow.Count; h++)
+            for (int i = 0; i < regionA.Count; i++)
             {
-                int c = hollow[h];
-                need += (SeaLevel - Ground(c) - water[c]) * G.Area[c];
-                for (int k = 0; k < 4; k++)
-                {
-                    int n = G.Nbr[c * 4 + k];
-                    if (n < 0 || mark[n] == markId || !IsOcean(n) || Ground(n) + water[n] >= SeaLevel - Sunken) continue;
-                    mark[n] = markId;
-                    hollow.Add(n);
-                }
+                int c = regionA[i];
+                mark[c] = markId;
+                if (regionG[i] >= radius || Ground(c) + water[c] >= level) continue;
+                hollow.Add(c);
+                need += (level - Ground(c) - water[c]) * G.Area[c];
             }
-            for (int i = 0; i < lenders.Count; i++)
-                if (mark[lenders[i]] != markId) poolArea += G.Area[lenders[i]];
+            var lenders = new List<int>();
+            for (int c = 0; c < M; c++)
+            {
+                if (wave.reach[c] < 0f || mark[c] == markId || water[c] < TsunamiDonorDepth) continue;
+                lenders.Add(c);
+                poolArea += G.Area[c];
+            }
             if (need <= 0d || poolArea <= 0d) return;
             var salt = waterState.salt;
             float given = Mathf.Min((float)(need / poolArea), TsunamiDonorDepth * 0.2f);
@@ -633,17 +650,16 @@ namespace LivingPlanet
             for (int i = 0; i < lenders.Count; i++)
             {
                 int sea = lenders[i];
-                if (mark[sea] == markId) continue;
                 float share = given / water[sea];
                 lent += given * G.Area[sea];
                 lentSalt += salt[sea] * share * G.Area[sea];
                 lentLoad += susp[sea] * share * G.Area[sea];
                 water[sea] -= given; salt[sea] *= 1f - share; susp[sea] *= 1f - share;
             }
-            for (int h = 0; h < hollow.Count; h++)
+            for (int i = 0; i < hollow.Count; i++)
             {
-                int c = hollow[h];
-                float got = (float)((SeaLevel - Ground(c) - water[c]) * lent / need);
+                int c = hollow[i];
+                float got = (float)((level - Ground(c) - water[c]) * lent / need);
                 salt[c] += (float)(lentSalt * got / lent);
                 susp[c] += (float)(lentLoad * got / lent);
                 water[c] += got;

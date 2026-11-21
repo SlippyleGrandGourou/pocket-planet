@@ -5,11 +5,22 @@ namespace LivingPlanet
 {
     // Nuages : un maillage low-poly par nuage (cumulus, stratus, cirrus, cumulonimbus), 3 niveaux d'opacité,
     // advectés par le vent (donc tournent autour des dépressions), colonnes de cendres des volcans.
+    // Tous partagent un seul matériau (shader LivingPlanet/Cloud) : la teinte et l'opacité sont données par
+    // instance, il y a donc un lot par forme et non par forme x couleur x opacité.
     public sealed partial class PlanetView
     {
         const int CW = 0, CG = 1, CS = 2, CT = 3, CA = 4;           // couleurs
-        const int SH_CUM = 0, SH_STR = 1, SH_CIR = 2, SH_TWR = 3;   // formes
-        const int CloudColors = 5, OpLevels = 3;
+        const int SH_CUM = 0, SH_STR = 1, SH_CIR = 2, SH_TWR = 3, SH_CUM2 = 4, SH_CUM3 = 5, SH_STR2 = 6, CloudShapes = 7;   // formes
+        const int BatchMax = 1023;   // limite d'instances par appel de dessin
+        static readonly int[] CumulusShapes = { SH_CUM, SH_CUM2, SH_CUM3 };
+        static readonly int[] StratusShapes = { SH_STR, SH_STR2 };
+        static readonly Color[] CloudTints =
+        {
+            new Color(1f, 1f, 1f), new Color(0.66f, 0.67f, 0.73f), new Color(0.36f, 0.37f, 0.43f),
+            new Color(0.95f, 0.96f, 1f), new Color(0.2f, 0.17f, 0.15f)
+        };
+        static readonly float[] CloudAlpha = { 0.55f, 0.8f, 1f };
+        static readonly int CloudTintId = Shader.PropertyToID("_LP_CloudTint"), CloudFlashId = Shader.PropertyToID("_LP_CloudFlash");
 
         struct CloudInst { public Vector3 pos; public Quaternion rot; public Vector3 scale; public int shape, color, lvl; }
         struct Bolt { public Vector3 a, b; public float life, max; public int seed; }
@@ -18,7 +29,10 @@ namespace LivingPlanet
         float[] siteYaw, siteSize, siteSt, sitePhase;
         int[] siteCell;
         int siteK;
-        Bucket[] cloudB;
+        Bucket[] cloudB;                 // un lot par forme
+        List<Vector4>[] cloudTint;       // teinte et opacité de chaque instance, dans le même ordre que cloudB[forme].m
+        readonly List<MaterialPropertyBlock> cloudProps = new List<MaterialPropertyBlock>();
+        readonly Vector4[] tintChunk = new Vector4[BatchMax];
         Bucket boltB;
         readonly List<CloudInst> clouds = new List<CloudInst>(2048);
         readonly List<Bolt> bolts = new List<Bolt>();
@@ -53,7 +67,7 @@ namespace LivingPlanet
                         i++;
                     }
 
-            var meshes = new Mesh[4];
+            var meshes = new Mesh[CloudShapes];
             var mb = new MeshBuilder();
             mb.Sphere(new Vector3(0f, 0.25f, 0f), 1f, 0.7f, 4, 7);
             mb.Sphere(new Vector3(0.95f, 0.05f, 0.2f), 0.7f, 0.7f, 4, 7);
@@ -61,11 +75,34 @@ namespace LivingPlanet
             mb.Sphere(new Vector3(0.2f, 0.6f, -0.6f), 0.6f, 0.7f, 4, 7);
             mb.Sphere(new Vector3(-0.1f, 0.75f, 0.5f), 0.55f, 0.7f, 4, 7);
             meshes[SH_CUM] = mb.Build();
+            // cumulus allongé, à base plate
+            mb = new MeshBuilder();
+            mb.Sphere(new Vector3(-1.1f, 0.1f, 0f), 0.7f, 0.6f, 4, 7);
+            mb.Sphere(new Vector3(-0.2f, 0.3f, 0.15f), 0.95f, 0.75f, 4, 7);
+            mb.Sphere(new Vector3(0.8f, 0.2f, -0.1f), 0.8f, 0.65f, 4, 7);
+            mb.Sphere(new Vector3(1.55f, 0.05f, 0.1f), 0.5f, 0.55f, 4, 6);
+            mb.Sphere(new Vector3(0.2f, 0.05f, -0.75f), 0.6f, 0.5f, 4, 6);
+            meshes[SH_CUM2] = mb.Build();
+            // cumulus bourgeonnant, plus haut que large
+            mb = new MeshBuilder();
+            mb.Sphere(new Vector3(0f, 0.1f, 0f), 0.95f, 0.6f, 4, 7);
+            mb.Sphere(new Vector3(0.6f, 0.15f, 0.55f), 0.65f, 0.65f, 4, 6);
+            mb.Sphere(new Vector3(-0.65f, 0.1f, -0.45f), 0.6f, 0.6f, 4, 6);
+            mb.Sphere(new Vector3(0.1f, 0.8f, -0.05f), 0.75f, 0.8f, 4, 7);
+            mb.Sphere(new Vector3(-0.15f, 1.35f, 0.1f), 0.5f, 0.8f, 4, 6);
+            meshes[SH_CUM3] = mb.Build();
             mb = new MeshBuilder();
             mb.Sphere(Vector3.zero, 1.6f, 0.1f, 3, 9);
             mb.Sphere(new Vector3(0.9f, 0f, 0.6f), 1f, 0.12f, 3, 8);
             mb.Sphere(new Vector3(-0.8f, 0.02f, -0.7f), 0.9f, 0.12f, 3, 8);
             meshes[SH_STR] = mb.Build();
+            // stratus en bancs étirés
+            mb = new MeshBuilder();
+            mb.Sphere(new Vector3(0f, 0f, -0.9f), 1.1f, 0.11f, 3, 8);
+            mb.Sphere(new Vector3(0.5f, 0.03f, 0.4f), 1.3f, 0.1f, 3, 9);
+            mb.Sphere(new Vector3(-0.6f, 0.01f, 1.4f), 0.8f, 0.12f, 3, 8);
+            mb.Sphere(new Vector3(1.5f, 0f, -0.3f), 0.7f, 0.1f, 3, 7);
+            meshes[SH_STR2] = mb.Build();
             mb = new MeshBuilder();
             mb.Sphere(new Vector3(0f, 0f, -1f), 0.6f, 0.12f, 3, 6);
             mb.Sphere(new Vector3(0.3f, 0f, 0f), 0.6f, 0.12f, 3, 6);
@@ -76,32 +113,135 @@ namespace LivingPlanet
             mb.Sphere(new Vector3(0f, 1.1f, 0f), 0.85f, 0.8f, 4, 7);
             mb.Sphere(new Vector3(0.15f, 1.9f, 0f), 0.7f, 0.9f, 4, 7);
             mb.Sphere(new Vector3(-0.1f, 2.6f, 0.1f), 0.55f, 0.9f, 4, 7);
-            mb.Sphere(new Vector3(0f, 3.1f, 0f), 1.7f, 0.18f, 4, 8);
+            // enclume : plusieurs lobes aplatis, pour ne pas dessiner un disque régulier vu du dessus
+            mb.Sphere(new Vector3(0f, 3.05f, 0f), 1.2f, 0.4f, 4, 8);
+            mb.Sphere(new Vector3(0.95f, 3.1f, 0.35f), 0.8f, 0.38f, 4, 7);
+            mb.Sphere(new Vector3(-0.85f, 3f, -0.5f), 0.85f, 0.36f, 4, 7);
+            mb.Sphere(new Vector3(-0.25f, 3.12f, 0.95f), 0.7f, 0.38f, 4, 7);
             meshes[SH_TWR] = mb.Build();
 
-            Color[] cols =
+            // Sans le shader dédié (absent d'un build, non supporté), les nuages restent des volumes blancs opaques.
+            var shader = Resources.Load<Shader>("LivingPlanet/Cloud");
+            Material mat = shader != null && shader.isSupported
+                ? new Material(shader) { enableInstancing = true }
+                : MakeLit(CloudTints[CW], 0f, true);
+            cloudB = new Bucket[CloudShapes];
+            cloudTint = new List<Vector4>[CloudShapes];
+            for (int s = 0; s < CloudShapes; s++)
             {
-                new Color(0.97f, 0.97f, 1f), new Color(0.55f, 0.56f, 0.62f), new Color(0.28f, 0.29f, 0.34f),
-                new Color(0.8f, 0.82f, 0.86f), new Color(0.2f, 0.17f, 0.15f)
-            };
-            float[] alpha = { 0.4f, 0.72f, 1f };
-            var mats = new Material[CloudColors * OpLevels];
-            for (int k = 0; k < CloudColors; k++)
-                for (int l = 0; l < OpLevels; l++)
-                {
-                    var c = cols[k]; c.a = alpha[l];
-                    var m = MakeLit(c, 0f, true);
-                    if (l < OpLevels - 1) MakeTransparent(m, false);
-                    mats[k * OpLevels + l] = m;
-                }
-            cloudB = new Bucket[4 * CloudColors * OpLevels];
-            for (int s = 0; s < 4; s++)
-                for (int k = 0; k < CloudColors * OpLevels; k++)
-                    cloudB[s * CloudColors * OpLevels + k] = new Bucket { mesh = meshes[s], mat = mats[k] };
+                BakePuff(meshes[s], s != SH_TWR);
+                cloudB[s] = new Bucket { mesh = meshes[s], mat = mat };
+                cloudTint[s] = new List<Vector4>(256);
+            }
+
+            BuildCloudShell();
 
             var bb = new MeshBuilder();
             bb.Box(Vector3.zero, new Vector3(1f, 1f, 1f));
             boltB = new Bucket { mesh = bb.Build(), mat = MakeUnlit(new Color(0.95f, 0.97f, 1f)) };
+        }
+
+        // Le shader éclaire le nuage comme une seule masse arrondie : chaque sommet reçoit (canal UV 1) la normale
+        // de l'ellipsoïde englobant le maillage, et sa hauteur relative pour assombrir la base. La couleur des
+        // sommets dit si le contour doit être fondu.
+        static void BakePuff(Mesh mesh, bool softEdge)
+        {
+            var vs = mesh.vertices;
+            Bounds b = mesh.bounds;
+            Vector3 e = Vector3.Max(b.extents, Vector3.one * 1e-3f);
+            var puff = new List<Vector4>(vs.Length);
+            for (int i = 0; i < vs.Length; i++)
+            {
+                Vector3 d = vs[i] - b.center;
+                Vector3 n = new Vector3(d.x / (e.x * e.x), d.y / (e.y * e.y), d.z / (e.z * e.z)).normalized;
+                puff.Add(new Vector4(n.x, n.y, n.z, Mathf.InverseLerp(b.min.y, b.max.y, vs[i].y)));
+            }
+            mesh.SetUVs(1, puff);
+            var edge = new Color32[vs.Length];
+            var c = new Color32((byte)(softEdge ? 255 : 0), 0, 0, 255);
+            for (int i = 0; i < edge.Length; i++) edge[i] = c;
+            mesh.colors32 = edge;
+        }
+
+        // Couverture nuageuse affichée, 0..1, à partir du champ de la simulation : les petites valeurs restent du
+        // ciel dégagé. Les volumes et la coquille lointaine passent tous deux par ici.
+        static float Cover(float cloud, float ash)
+        {
+            return Mathf.Max(Mathf.Clamp01((cloud - 0.18f) / 0.82f), Mathf.Min(1f, ash));
+        }
+
+        // ---------------------------------------------------------------- coquille lointaine
+        // De l'espace, quelques centaines de volumes ne peuvent pas montrer les bandes nuageuses de la planète :
+        // une sphère à l'altitude des nuages les dessine à partir de la couverture par cellule, et s'efface quand
+        // la caméra descend vers les volumes.
+        const int ShellRes = 64;
+        const float ShellRefresh = 0.6f;
+        static readonly int ShellFadeId = Shader.PropertyToID("_LP_ShellFade"), ShellDriftId = Shader.PropertyToID("_LP_ShellDrift"),
+            LensOriginId = Shader.PropertyToID("_LP_LensOrigin"), LensDirId = Shader.PropertyToID("_LP_LensDir");
+        Mesh shellMesh;
+        Material shellMat;
+        MeshRenderer shellR;
+        int[] shellCell;
+        Color32[] shellCol;
+        float shellTimer = ShellRefresh, shellDrift;
+
+        void BuildCloudShell()
+        {
+            var shader = Resources.Load<Shader>("LivingPlanet/CloudShell");
+            if (shader == null || !shader.isSupported) return;
+            // Le maillage et le matériau sont portés par un objet enfant de root : Destroy() les libère avec lui.
+            shellMesh = BuildGridMesh(ShellRes, R + 105f * HeightScale, -1);
+            shellMesh.MarkDynamic();
+            var vs = shellMesh.vertices;
+            shellCell = new int[vs.Length];
+            shellCol = new Color32[vs.Length];
+            for (int i = 0; i < vs.Length; i++) shellCell[i] = G.CellFromDir(vs[i].normalized);
+            shellMesh.colors32 = shellCol;
+            shellMat = new Material(shader);
+            var go = new GameObject("CloudShell");
+            go.transform.SetParent(root.transform, false);
+            go.AddComponent<MeshFilter>().sharedMesh = shellMesh;
+            shellR = go.AddComponent<MeshRenderer>();
+            shellR.sharedMaterial = shellMat;
+            shellR.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+            shellR.receiveShadows = false;
+            shellR.enabled = false;
+        }
+
+        // Recopie la couverture de la simulation dans les couleurs des sommets (moyenne de la cellule et de ses voisines).
+        void RefreshCloudShell()
+        {
+            if (shellMesh == null || S.cloud == null) return;
+            var nbr = G.Nbr;
+            for (int i = 0; i < shellCell.Length; i++)
+            {
+                int c = shellCell[i];
+                float cover = Cover(S.cloud[c], S.ash[c]), storm = S.storm[c], ash = S.ash[c];
+                int count = 1;
+                for (int k = 0; k < 4; k++)
+                {
+                    int n = nbr[c * 4 + k];
+                    if (n < 0) continue;
+                    cover += Cover(S.cloud[n], S.ash[n]); storm += S.storm[n]; ash += S.ash[n];
+                    count++;
+                }
+                float inv = 255f / count;
+                shellCol[i] = new Color32((byte)(cover * inv), (byte)(Mathf.Clamp01(storm / count) * 255f), (byte)(Mathf.Clamp01(ash / count) * 255f), 255);
+            }
+            shellMesh.colors32 = shellCol;
+        }
+
+        void DrawCloudShell()
+        {
+            if (shellR == null) return;
+            float alt = lastCamPos.magnitude - R;
+            float fade = Mathf.SmoothStep(0f, 1f, Mathf.InverseLerp(380f * HeightScale, 900f * HeightScale, alt));
+            shellR.enabled = ShowClouds && fade > 0.01f;
+            if (!shellR.enabled) return;
+            shellMat.SetFloat(ShellFadeId, fade);
+            shellMat.SetFloat(ShellDriftId, shellDrift);
+            shellMat.SetVector(LensOriginId, new Vector4(lensO.x, lensO.y, lensO.z, lensOn ? 1f : 0f));
+            shellMat.SetVector(LensDirId, lensD);
         }
 
         static int OpLevel(float cs) { return cs < 0.4f ? 0 : (cs < 0.75f ? 1 : 2); }
@@ -124,6 +264,9 @@ namespace LivingPlanet
             float L = spacing * 2.2f;
             float blend = 1f - Mathf.Exp(-dt * 0.4f);
             float vis = TimeScale <= 0f ? 0f : 1f + 0.4f * Mathf.Log(Mathf.Max(1f, TimeScale), 2f);
+            shellDrift += dt * vis * 0.004f;
+            shellTimer += dt;
+            if (shellTimer >= ShellRefresh) { shellTimer = 0f; RefreshCloudShell(); }
 
             for (int i = 0; i < siteDir.Length; i++)
             {
@@ -155,13 +298,13 @@ namespace LivingPlanet
                 float hr = S.hum[c] / sat;
                 float rain = Mathf.Clamp01(S.rainNow[c] * 40f);
                 // la couverture vient du modèle de nuages de la simulation ; les petites valeurs restent du ciel dégagé
-                float cov = Mathf.Clamp01((S.cloud[c] - 0.18f) / 0.82f);
-                cov = Mathf.Max(cov, Mathf.Min(1f, ash));
+                float cov = Cover(S.cloud[c], ash);
                 siteSize[i] += (cov - siteSize[i]) * blend;
                 siteSt[i] += (st - siteSt[i]) * blend;
                 st = siteSt[i];
                 float cs = siteSize[i];
                 if (!near) continue;
+                int cumulus = CumulusShapes[i % CumulusShapes.Length], stratus = StratusShapes[i % StratusShapes.Length];
 
                 Vector3 w = Vector3.ProjectOnPlane(S.wind[c], sd);
                 float wm = w.magnitude;
@@ -199,7 +342,7 @@ namespace LivingPlanet
                 else if (st > 0.3f)
                 {
                     float tower = r * (0.55f + 0.35f * st);
-                    AddCloud(d * (h - 4f * HeightScale), rot, new Vector3(tower, tower * (0.8f + 0.9f * st), tower), SH_TWR, st > 0.7f ? CS : CG, st > 0.6f ? 2 : 1);
+                    AddCloud(d * (h - 4f * HeightScale), rot, new Vector3(tower, tower * (0.5f + 0.35f * st), tower), SH_TWR, st > 0.7f ? CS : CG, st > 0.6f ? 2 : 1);
                     if (st > 0.6f && bolts.Count < 16 && alt < 900f * HeightScale && vr.NextDouble() < 0.009 * st)
                     {
                         Vector3 top = d * (h + tower * 0.4f);
@@ -209,20 +352,20 @@ namespace LivingPlanet
                 }
                 else if (rain > 0.15f || hr > 0.95f)
                 {
-                    AddCloud(d * (h - 4f * HeightScale), rot, new Vector3(r * 0.9f, r * (0.8f + 0.3f * cs), r * 0.9f), SH_CUM, CG, Mathf.Max(1, lvl));
+                    AddCloud(d * (h - 4f * HeightScale), rot, new Vector3(r * 0.9f, r * (0.8f + 0.3f * cs), r * 0.9f), cumulus, CG, Mathf.Max(1, lvl));
                 }
                 else if (S.temp[c] < 8f && hr > 0.75f)
                 {
-                    AddCloud(d * (R + 65f * HeightScale + 0.35f * g), rot, new Vector3(r * 1.1f, r, r * 1.1f), SH_STR, CT, lvl == 0 ? 0 : 1);
+                    AddCloud(d * (R + 65f * HeightScale + 0.35f * g), rot, new Vector3(r * 1.1f, r, r * 1.1f), stratus, CT, lvl == 0 ? 0 : 1);
                 }
                 else if (S.frontN[c] > 0.45f && wm > 0.18f)
                 {
                     float stretch = 1f + Mathf.Min(0.9f, wm);
-                    AddCloud(d * h, rot, new Vector3(r * 0.9f, r, r * stretch), SH_STR, CW, Mathf.Min(lvl, 1));
+                    AddCloud(d * h, rot, new Vector3(r * 0.9f, r, r * stretch), stratus, CW, Mathf.Min(lvl, 1));
                 }
                 else
                 {
-                    AddCloud(d * h, rot, new Vector3(r, r * (0.7f + 0.4f * cs), r), SH_CUM, CW, lvl);
+                    AddCloud(d * h, rot, new Vector3(r, r * (0.7f + 0.4f * cs), r), cumulus, CW, lvl);
                 }
             }
 
@@ -308,9 +451,9 @@ namespace LivingPlanet
         void DrawClouds(Bounds bounds)
         {
             if (cloudB == null) return;
-            for (int k = 0; k < cloudB.Length; k++) cloudB[k].n = 0;
+            DrawCloudShell();
+            for (int k = 0; k < cloudB.Length; k++) { cloudB[k].n = 0; cloudTint[k].Clear(); }
             bool lens = lensOn;
-            int per = CloudColors * OpLevels;
             for (int i = 0; ShowClouds && i < clouds.Count; i++)
             {
                 var p = clouds[i];
@@ -328,9 +471,16 @@ namespace LivingPlanet
                         s *= f;
                     }
                 }
-                cloudB[p.shape * per + p.color * OpLevels + p.lvl].Add(Matrix4x4.TRS(p.pos, p.rot, s));
+                cloudB[p.shape].Add(Matrix4x4.TRS(p.pos, p.rot, s));
+                Color tint = CloudTints[p.color].linear;   // le shader calcule en espace linéaire
+                cloudTint[p.shape].Add(new Vector4(tint.r, tint.g, tint.b, CloudAlpha[p.lvl]));
             }
-            for (int k = 0; k < cloudB.Length; k++) if (cloudB[k].n > 0) DrawBucket(cloudB[k], bounds, false);
+            // l'éclair en cours éclaire aussi les nuages (le shader ne lit pas les lumières ponctuelles)
+            cloudB[0].mat.SetVector(CloudFlashId, new Vector4(flashPos.x, flashPos.y, flashPos.z, flashI));
+            int call = 0;
+            for (int k = 0; k < cloudB.Length; k++)
+                for (int start = 0; start < cloudB[k].n; start += BatchMax)
+                    DrawCloudBatch(cloudB[k], cloudTint[k], start, bounds, call++);
 
             boltB.n = 0;
             for (int i = 0; i < bolts.Count; i++)
@@ -358,7 +508,26 @@ namespace LivingPlanet
                     if (sl > 0.01f) boltB.Add(Matrix4x4.TRS((prev + pt) * 0.5f, Quaternion.LookRotation(sv / sl), new Vector3(width, width, sl)));
                     prev = pt;
                 }
-            }            DrawBucket(boltB, bounds, false);
+            }
+            DrawBucket(boltB, bounds, false);
+        }
+
+        // Un appel de dessin : au plus BatchMax instances d'une forme, avec leur teinte. Chaque appel garde son
+        // propre bloc de propriétés, car le rendu ne les lit qu'à la fin de l'image.
+        void DrawCloudBatch(Bucket bk, List<Vector4> tints, int start, Bounds bounds, int call)
+        {
+            int count = Mathf.Min(BatchMax, bk.n - start);
+            if (call == cloudProps.Count) cloudProps.Add(new MaterialPropertyBlock());
+            tints.CopyTo(start, tintChunk, 0, count);
+            cloudProps[call].SetVectorArray(CloudTintId, tintChunk);
+            var rp = new RenderParams(bk.mat)
+            {
+                shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off,
+                receiveShadows = false,
+                worldBounds = bounds,
+                matProps = cloudProps[call]
+            };
+            Graphics.RenderMeshInstanced(rp, bk.mesh, 0, bk.m, count, start);
         }
     }
 }

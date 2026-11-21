@@ -11,7 +11,7 @@ namespace LivingPlanet
     // Format versionné : seules les données de simulation connues sont lues, jamais des types provenant du fichier.
     static class PlanetSave
     {
-        const int Version = 20;
+        const int Version = 21;
         const int Magic = 0x4c505331;
         static readonly Dictionary<Type, FieldInfo[]> fieldCache = new Dictionary<Type, FieldInfo[]>();
         static readonly Type lavaFlow = typeof(PlanetSim).GetNestedType("LavaFlow", BindingFlags.NonPublic);
